@@ -1,0 +1,152 @@
+name: Build and release Hongputao
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish from a matching version tag after successful builds
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: '3.47.7'
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: subosito/flutter-action@v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - id: version
+        name: Validate release version
+        env:
+          PUBLISH_REQUESTED: ${{ inputs.publish }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, re, pathlib
+          version = re.search(r'^version:\s*(\d+\.\d+\.\d+)\+\d+', pathlib.Path('pubspec.yaml').read_text(), re.M).group(1)
+          if os.environ.get('GITHUB_REF_TYPE') == 'tag' and os.environ['GITHUB_REF_NAME'] != 'v' + version:
+              raise SystemExit('Version tag must match pubspec.yaml')
+          if os.environ.get('PUBLISH_REQUESTED') == 'true' and os.environ.get('GITHUB_REF_TYPE') != 'tag':
+              raise SystemExit('Manual publishing requires a matching version tag; branch runs must keep publish disabled')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('version=' + version + '\n')
+          PY
+      - run: flutter pub get
+      - run: flutter analyze --no-pub
+      - run: flutter test --no-pub
+      - run: python3 -m unittest discover -s scripts/tests
+
+  android:
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-java@v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: subosito/flutter-action@v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - name: Configure release signing in runner temporary storage
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: python3 scripts/configure-ci-signing.py
+      - run: flutter build apk --release --target-platform android-arm64 --no-pub
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: android-arm64
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          compression-level: 0
+
+  windows:
+    needs: [quality, android]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24'
+      - uses: subosito/flutter-action@v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress --yes
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: android-arm64
+          path: build/app/outputs/flutter-apk
+      - run: flutter pub get
+      - run: flutter build windows --release --no-pub
+      - name: Check compiled taskbar icon transparency
+        run: python scripts/check-windows-icon.py build/windows/x64/runner/Release/hongguo_studio.exe
+      - name: Package installer, APK, portable backup and corresponding source
+        shell: pwsh
+        run: ./scripts/package.ps1
+      - name: Check installer icon transparency
+        shell: pwsh
+        run: python scripts/check-windows-icon.py "dist/Hongputao-Windows-${{ needs.quality.outputs.version }}-Setup.exe"
+      - name: Validate clean install, bundled engine and uninstall data preservation
+        shell: pwsh
+        run: ./scripts/test-installer.ps1
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: release-bundle
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            dist/Hongputao-Windows-*-Setup.exe
+            dist/Hongputao-Windows-*.zip
+            dist/Hongputao-Android-arm64-*.apk
+            dist/Hongputao-Source-*.zip
+            dist/SHA256SUMS.txt
+
+  release:
+    needs: [quality, windows]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: release-bundle
+          path: dist
+      - name: Publish versioned release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.quality.outputs.version }}
+        shell: bash
+        run: |
+          gh release create "v${RELEASE_VERSION}" \
+            dist/*.exe dist/*.apk dist/*.zip dist/SHA256SUMS.txt \
+            --verify-tag --title "红葡萄 ${RELEASE_VERSION}" --generate-notes

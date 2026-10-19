@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// One request per process. Secrets use stdin/stdout, never command-line arguments.
+'use strict';
+const readline = require('node:readline');
+const signer = require('./signer.cjs');
+readline.createInterface({ input: process.stdin, terminal: false }).once('line', line => {
+  try {
+    const input = JSON.parse(line);
+    if (!input.device || !/^[1-9]\d{15,19}$/.test(input.device.device_id) || !/^[1-9]\d{15,19}$/.test(input.device.iid)) throw Error('Invalid visitor identity');
+    let signed;
+    if (input.operation === 'search') {
+      const allowed = new Set(['query','tab_type','count','bookshelf_search_plan','user_is_login','offset','search_id','passback']);
+      if (!input.query || typeof input.query.query !== 'string' || [...input.query.query].length < 1 || [...input.query.query].length > 80) throw Error('Invalid search');
+      for (const [key,value] of Object.entries(input.query)) {
+        if (!allowed.has(key) || typeof value !== 'string' || value.length > 2048 || /[\x00-\x1f]/.test(value)) throw Error('Invalid search field');
+      }
+      signed = signer.signSearch(input.query, input.device);
+    } else {
+      if (input.operation !== undefined || typeof input.body !== 'string' || input.body.length > 65536) throw Error('Invalid request');
+      signed = signer.sign(input.body, input.device);
+    }
+    process.stdout.write(JSON.stringify({url:signed.url, headers:signed.headers, body:signed.body.toString('utf8')}));
+  } catch (_) { process.stderr.write('Protocol signing failed'); process.exitCode = 1; }
+});

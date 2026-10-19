@@ -1,0 +1,111 @@
+import 'package:flutter/material.dart';
+import 'dart:io';
+import 'dart:ui' as ui;
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:hongguo_studio/app_controller.dart';
+import 'package:hongguo_studio/domain/discovery.dart';
+import 'package:hongguo_studio/playback_controller.dart';
+import 'package:hongguo_studio/playback_view.dart';
+import 'playback_controller_test.dart'
+    show FakePlaybackEngine, FakePlaybackClient;
+
+void main() {
+  for (final width in [1320.0, 390.0, 320.0]) {
+    testWidgets('playback, stitching and task entry at $width', (tester) async {
+      tester.view.physicalSize = Size(width, 1100);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final engine = FakePlaybackEngine();
+      final c = PlaybackController(
+        engine: engine,
+        client: FakePlaybackClient(),
+      );
+      final tasks = StudioController();
+      await c.load('123');
+      if (Platform.environment['HONGGUO_CAPTURE_UI'] == '1' &&
+          Platform.isWindows) {
+        await tester.runAsync(() async {
+          final loader = FontLoader('Microsoft YaHei');
+          loader.addFont(
+            Future.value(
+              ByteData.sublistView(
+                await File('C:/Windows/Fonts/msyh.ttc').readAsBytes(),
+              ),
+            ),
+          );
+          await loader.load();
+          final icons = FontLoader('MaterialIcons');
+          icons.addFont(
+            Future.value(
+              ByteData.sublistView(
+                await File(
+                  'D:/envs/flutter-sdk/flutter/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
+                ).readAsBytes(),
+              ),
+            ),
+          );
+          await icons.load();
+        });
+      }
+      var stitched = <int>{}, taskVisits = 0;
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: const ValueKey('player-capture'),
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: ThemeData(
+              fontFamily: 'Microsoft YaHei',
+              platform: width < 600
+                  ? TargetPlatform.android
+                  : TargetPlatform.windows,
+              colorScheme: ColorScheme.fromSeed(
+                seedColor: const Color(0xFFC20032),
+              ),
+            ),
+            home: PlaybackScreen(
+              summary: const DramaSummary(id: '123', title: '示例剧集'),
+              tasks: tasks,
+              controller: c,
+              videoBuilder: () => const ColoredBox(color: Colors.black),
+              onStitch: (_, selection, _) async {
+                stitched = selection;
+                return true;
+              },
+              onTasks: () => taskVisits++,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      if (Platform.environment['HONGGUO_CAPTURE_UI'] == '1') {
+        await tester.runAsync(() async {
+          final boundary = tester.renderObject<RenderRepaintBoundary>(
+            find.byKey(const ValueKey('player-capture')),
+          );
+          final image = await boundary.toImage();
+          final data = await image.toByteData(format: ui.ImageByteFormat.png);
+          await Directory('.local/qa').create(recursive: true);
+          await File(
+            '.local/qa/player-${width.toInt()}.png',
+          ).writeAsBytes(data!.buffer.asUint8List());
+          image.dispose();
+        });
+      }
+      expect(find.text('任务管理'), findsOneWidget);
+      await tester.tap(find.text('任务管理'));
+      expect(taskVisits, 1);
+      await tester.ensureVisible(find.text('拼接所选 1 集'));
+      await tester.tap(find.text('拼接所选 1 集'));
+      await tester.pumpAndSettle();
+      expect(stitched, {1});
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      c.dispose();
+      tasks.dispose();
+    });
+  }
+}

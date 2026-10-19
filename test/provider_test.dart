@@ -1,0 +1,144 @@
+import 'dart:convert';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:hongguo_studio/data/hongguo_client.dart';
+import 'package:hongguo_studio/domain/drama.dart';
+import 'package:hongguo_studio/data/request_signer.dart';
+
+class FakeSigner implements RequestSigner {
+  @override
+  Future<SignedRequest> sign(String body, Map<String, String> device) async =>
+      SignedRequest(
+        Uri.https(
+          'api5-normal-sinfonlineb.fqnovel.com',
+          '/novel/player/multi_video_model/v1/',
+        ),
+        {'X-Gorgon': 'test'},
+        body,
+      );
+}
+
+void main() {
+  test('accepts player links and rejects lookalike hosts', () {
+    expect(
+      seriesIdFromInput('https://hongguoduanju.com/player/123/456'),
+      '123',
+    );
+    expect(
+      seriesIdFromInput('https://hongguoduanju.com/detail?series_id=123'),
+      '123',
+    );
+    expect(
+      () => seriesIdFromInput('https://hongguoduanju.com.evil.test/player/123'),
+      throwsFormatException,
+    );
+    expect(
+      () => seriesIdFromInput('https://user:pass@evil.test/player/123'),
+      throwsFormatException,
+    );
+  });
+  test('rejects missing, duplicate and mismatched episodes', () {
+    final detail = <String, dynamic>{
+      'series_id': '123',
+      'episode_cnt': 2,
+      'series_title': '测试',
+      'video_list': [
+        {'vid': '2', 'vid_index': 2},
+        {'vid': '1', 'vid_index': 1},
+      ],
+    };
+    final result = {
+      'data': {'video_data': detail},
+    };
+    expect(parseAppDrama(result, '123').episodes.first.id, '1');
+    expect(() => parseAppDrama(result, '456'), throwsFormatException);
+    detail['episode_cnt'] = 3;
+    expect(() => parseAppDrama(result, '123'), throwsFormatException);
+    detail['episode_cnt'] = 2;
+    detail['video_list'] = [
+      {'vid': '1', 'vid_index': 1},
+      {'vid': '1', 'vid_index': 2},
+    ];
+    expect(() => parseAppDrama(result, '123'), throwsFormatException);
+  });
+  test('selects actual compatible qualities, never invents 1080p', () {
+    final options = parseVariants({
+      'video_list': {
+        'a': {
+          'main_url': 'https://media.example/a',
+          'video_meta': {'definition': '2160p', 'codec_type': 'bytevc2'},
+        },
+        'b': {
+          'main_url': 'https://media.example/b',
+          'video_meta': {'definition': '720p', 'codec_type': 'h264'},
+        },
+        'c': {
+          'main_url': 'https://media.example/c',
+          'video_meta': {'definition': '1080p', 'codec_type': 'hevc'},
+        },
+      },
+    });
+    expect(options.map((v) => v.quality), [1080, 720]);
+    expect(chooseQuality(options, 0).quality, 1080);
+    expect(chooseQuality(options, 900).quality, 720);
+    expect(chooseQuality(options, 360).quality, 720);
+    expect(chooseQuality([options.last], 1080).quality, 720);
+    expect(() => decodeContentKey('bad key'), throwsFormatException);
+  });
+  test('parses escaped braces and quotes in page JSON without evaluating JS', () {
+    final data = {
+      'loaderData': {
+        'player_(series_id)/page': {
+          'seriesDetail': {
+            'series_id': '123',
+            'series_name': '标题 } " 测试',
+            'vid_list': ['7', '8'],
+          },
+        },
+      },
+    };
+    final html =
+        '<script>window._ROUTER_DATA=${jsonEncode(data)};malicious();</script>';
+    final drama = parseWebDrama(html, '123');
+    expect(drama.episodes.length, 2);
+    expect(drama.title, '标题 } " 测试');
+    expect(() => parseWebDrama(html, '999'), throwsFormatException);
+  });
+  test(
+    'App failure falls back to page details but empty media remains an error',
+    () async {
+      final client = HongguoClient(
+        signer: FakeSigner(),
+        client: MockClient((request) async {
+          if (request.url.host == 'hongguoduanju.com') {
+            return http.Response(
+              'window._ROUTER_DATA=${jsonEncode({
+                'loaderData': {
+                  'player_x': {
+                    'seriesDetail': {
+                      'series_id': '123',
+                      'series_name': '测试',
+                      'vid_list': ['9'],
+                    },
+                  },
+                },
+              })};',
+              200,
+              headers: {'content-type': 'text/html; charset=utf-8'},
+            );
+          }
+          expect(request.headers['X-Gorgon'], isNotEmpty);
+          return http.Response('', 200);
+        }),
+      );
+      final drama = await client.fetchDrama('123');
+      expect(drama.source, '网页详情回退');
+      await expectLater(
+        client.fetchVariants(drama.episodes.first),
+        throwsStateError,
+      );
+      client.close();
+    },
+  );
+}
