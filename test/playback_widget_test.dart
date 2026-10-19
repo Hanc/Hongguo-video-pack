@@ -102,6 +102,46 @@ void main() {
       await tester.tap(find.text('拼接所选 1 集'));
       await tester.pumpAndSettle();
       expect(stitched, {1});
+      await tester.ensureVisible(find.byKey(const ValueKey('episode-13')));
+      await tester.pumpAndSettle();
+      final cells = [
+        for (var number = 1; number <= 50; number++)
+          tester.getRect(find.byKey(ValueKey('episode-$number'))),
+      ];
+      for (final cell in cells) {
+        expect(cell.width, closeTo(cells.first.width, .01));
+        expect(cell.height, closeTo(cells.first.height, .01));
+      }
+      final columns = cells.where((rect) => rect.top == cells.first.top).length;
+      for (var i = 0; i < cells.length; i++) {
+        expect(
+          cells[i].left,
+          closeTo(cells[i % columns].left, .01),
+          reason: 'Single and double digit episodes share column edges',
+        );
+      }
+      await c.play(12);
+      await tester.pumpAndSettle();
+      for (var number = 1; number <= 50; number++) {
+        expect(
+          tester.getRect(find.byKey(ValueKey('episode-$number'))),
+          cells[number - 1],
+          reason: 'Selection must not move cells',
+        );
+      }
+      if (Platform.environment['HONGGUO_CAPTURE_UI'] == '1') {
+        await tester.runAsync(() async {
+          final boundary = tester.renderObject<RenderRepaintBoundary>(
+            find.byKey(const ValueKey('player-capture')),
+          );
+          final image = await boundary.toImage();
+          final data = await image.toByteData(format: ui.ImageByteFormat.png);
+          await File(
+            '.local/qa/episodes-${width.toInt()}.png',
+          ).writeAsBytes(data!.buffer.asUint8List());
+          image.dispose();
+        });
+      }
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       c.dispose();

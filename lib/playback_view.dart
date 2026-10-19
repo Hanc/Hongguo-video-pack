@@ -458,30 +458,85 @@ class _PlaybackScreenState extends State<PlaybackScreen>
                           ),
                         ),
                       const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          for (
-                            var i = rangePage * 50;
-                            i <
-                                ((rangePage + 1) * 50).clamp(
-                                  0,
-                                  episodes.length,
-                                );
-                            i++
-                          )
-                            FilterChip(
-                              label: Text('第 ${episodes[i].number} 集'),
-                              selected: choosing
-                                  ? c.selected.contains(episodes[i].number)
-                                  : i == c.index,
-                              side: BorderSide.none,
-                              onSelected: (_) => choosing
-                                  ? c.toggleSelection(episodes[i].number)
-                                  : c.play(i),
-                            ),
-                        ],
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final scale =
+                              MediaQuery.textScalerOf(context).scale(13) / 13;
+                          final columns = (constraints.maxWidth / (80 * scale))
+                              .floor()
+                              .clamp(1, 10);
+                          final start = rangePage * 50;
+                          final count = (episodes.length - start).clamp(0, 50);
+                          return GridView.builder(
+                            shrinkWrap: true,
+                            padding: EdgeInsets.zero,
+                            physics: const NeverScrollableScrollPhysics(),
+                            gridDelegate:
+                                SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: columns,
+                                  crossAxisSpacing: 8,
+                                  mainAxisSpacing: 8,
+                                  mainAxisExtent: 48 * scale,
+                                ),
+                            itemCount: count,
+                            itemBuilder: (context, offset) {
+                              final i = start + offset;
+                              final number = episodes[i].number;
+                              final selected = choosing
+                                  ? c.selected.contains(number)
+                                  : i == c.index;
+                              final colors = Theme.of(context).colorScheme;
+                              return Semantics(
+                                selected: selected,
+                                child: TextButton(
+                                  key: ValueKey('episode-$number'),
+                                  style: TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                    ),
+                                    backgroundColor: selected
+                                        ? colors.secondaryContainer
+                                        : Colors.white,
+                                    foregroundColor: selected
+                                        ? colors.onSecondaryContainer
+                                        : const Color(0xFF24242D),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  onPressed: () => choosing
+                                      ? c.toggleSelection(number)
+                                      : c.play(i),
+                                  child: Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      Center(
+                                        child: FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Text(
+                                            '第 $number 集',
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      if (selected)
+                                        const Positioned(
+                                          right: 0,
+                                          top: 2,
+                                          child: Icon(
+                                            Icons.check_rounded,
+                                            size: 12,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          );
+                        },
                       ),
                       if (pages > 1)
                         Row(
