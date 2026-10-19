@@ -98,22 +98,33 @@ class _DiscoveryViewState extends State<DiscoveryView> {
         ),
         const SizedBox(height: 18),
         if (c.mode == DiscoveryMode.ranking)
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final b in DiscoveryClient.boards.entries)
-                ChoiceChip(
-                  label: Text(b.value),
-                  selected: c.board == b.key,
-                  side: BorderSide.none,
-                  showCheckmark: false,
-                  onSelected: (_) {
-                    c.board = b.key;
-                    c.show(DiscoveryMode.ranking);
-                  },
-                ),
-            ],
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final b in DiscoveryClient.boards.entries)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: ChoiceChip(
+                      label: Text(b.value),
+                      labelStyle: TextStyle(
+                        fontSize: MediaQuery.sizeOf(context).width < 600
+                            ? 12
+                            : 14,
+                      ),
+                      labelPadding: const EdgeInsets.symmetric(horizontal: 5),
+                      visualDensity: VisualDensity.compact,
+                      selected: c.board == b.key,
+                      side: BorderSide.none,
+                      showCheckmark: false,
+                      onSelected: (_) {
+                        c.board = b.key;
+                        c.show(DiscoveryMode.ranking);
+                      },
+                    ),
+                  ),
+              ],
+            ),
           ),
         if (c.mode == DiscoveryMode.random)
           Wrap(

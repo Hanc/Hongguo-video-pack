@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:window_manager/window_manager.dart';
 import 'app_controller.dart';
 import 'domain/discovery.dart';
 import 'domain/drama.dart';
 import 'playback_controller.dart';
+import 'playback_gestures.dart';
 import 'services/playback_engine.dart';
 
 class PlaybackScreen extends StatefulWidget {
@@ -38,6 +40,59 @@ class _PlaybackScreenState extends State<PlaybackScreen>
   final first = TextEditingController(text: '1'),
       last = TextEditingController(text: '1');
   bool choosing = false, preparing = false;
+  static const _platform = MethodChannel('dev.hongguo.studio/platform');
+
+  Widget _controls(VideoState state) => Builder(
+    builder: (context) {
+      if (desktop) return MaterialVideoControls(state);
+      final controls = MaterialVideoControlsTheme(
+        normal: const MaterialVideoControlsThemeData(),
+        fullscreen: const MaterialVideoControlsThemeData(
+          volumeGesture: false,
+          brightnessGesture: false,
+          seekGesture: false,
+        ),
+        child: MaterialVideoControls(state),
+      );
+      if (!isFullscreen(context) ||
+          MediaQuery.orientationOf(context) != Orientation.landscape) {
+        return controls;
+      }
+      final player = _native!.player;
+      return PlaybackGestures(
+        position: () => player.state.position,
+        duration: () => player.state.duration,
+        seek: player.seek,
+        changeEpisode: (step) {
+          final next = c.index + step;
+          if (!c.loading &&
+              next >= 0 &&
+              next < (c.drama?.episodes.length ?? 0)) {
+            unawaited(c.play(next));
+          }
+        },
+        levels: () async {
+          final values = await _platform.invokeMapMethod<String, dynamic>(
+            'playbackLevels',
+          );
+          return (
+            (values?['brightness'] as num?)?.toDouble() ?? .5,
+            (values?['volume'] as num?)?.toDouble() ?? .5,
+          );
+        },
+        setLevel: (light, value) => _platform.invokeMethod<void>(
+          light ? 'playbackBrightness' : 'playbackVolume',
+          {'value': value},
+        ),
+        onDispose: () => unawaited(
+          _platform
+              .invokeMethod<void>('resetPlaybackBrightness')
+              .catchError((Object _) {}),
+        ),
+        child: controls,
+      );
+    },
+  );
   int episodePage = 0;
   bool get desktop => {
     TargetPlatform.windows,
@@ -172,7 +227,7 @@ class _PlaybackScreenState extends State<PlaybackScreen>
                                 else
                                   Video(
                                     controller: _video!,
-                                    controls: MaterialVideoControls,
+                                    controls: _controls,
                                   ),
                                 if (c.loading)
                                   const IgnorePointer(

@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.media.AudioManager
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -17,11 +19,39 @@ class MainActivity : FlutterActivity() {
     private val signer = Signer()
     private var saveReply: MethodChannel.Result? = null
     private var saveSource: File? = null
+    private var originalPlaybackBrightness: Float? = null
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.hongguo.studio/platform").setMethodCallHandler { call, result ->
             try {
                 when (call.method) {
+                    "playbackLevels" -> {
+                        if (originalPlaybackBrightness == null) originalPlaybackBrightness = window.attributes.screenBrightness
+                        val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+                        val maximum = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                        val current = window.attributes.screenBrightness
+                        val brightness = if (current >= 0) current.toDouble() else
+                            Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128) / 255.0
+                        result.success(mapOf("brightness" to brightness, "volume" to audio.getStreamVolume(AudioManager.STREAM_MUSIC).toDouble() / maximum))
+                    }
+                    "playbackBrightness" -> {
+                        if (originalPlaybackBrightness == null) originalPlaybackBrightness = window.attributes.screenBrightness
+                        val value = requireNotNull(call.argument<Number>("value")).toFloat().coerceIn(0.05f, 1f)
+                        window.attributes = window.attributes.apply { screenBrightness = value }
+                        result.success(null)
+                    }
+                    "resetPlaybackBrightness" -> {
+                        originalPlaybackBrightness?.let { value -> window.attributes = window.attributes.apply { screenBrightness = value } }
+                        originalPlaybackBrightness = null
+                        result.success(null)
+                    }
+                    "playbackVolume" -> {
+                        val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+                        val value = requireNotNull(call.argument<Number>("value")).toDouble().coerceIn(0.0, 1.0)
+                        val maximum = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                        audio.setStreamVolume(AudioManager.STREAM_MUSIC, kotlin.math.round(value * maximum).toInt(), 0)
+                        result.success(null)
+                    }
                     "sign" -> {
                         val body = requireNotNull(call.argument<String>("body"))
                         val device = requireNotNull(call.argument<Map<String, String>>("device"))

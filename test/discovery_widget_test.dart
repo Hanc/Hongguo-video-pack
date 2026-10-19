@@ -72,6 +72,20 @@ void main() {
       expect(find.text('MAKE STORIES FLOW'), findsNothing);
       expect(find.widgetWithText(TextField, '搜索剧名'), findsOneWidget);
       expect(find.text('5362万热度'), findsOneWidget);
+      final chips = tester
+          .widgetList<ChoiceChip>(find.byType(ChoiceChip))
+          .toList();
+      expect(chips.length, 4);
+      final positions = find
+          .byType(ChoiceChip)
+          .evaluate()
+          .map((element) => tester.getTopLeft(find.byWidget(element.widget)).dy)
+          .toSet();
+      expect(
+        positions.length,
+        1,
+        reason: 'Ranking filters must stay on one line',
+      );
       expect(tester.takeException(), isNull);
       if (Platform.environment['HONGGUO_CAPTURE_UI'] == '1') {
         await tester.runAsync(
