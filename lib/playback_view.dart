@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:window_manager/window_manager.dart';
 import 'app_controller.dart';
@@ -8,6 +9,7 @@ import 'domain/discovery.dart';
 import 'domain/drama.dart';
 import 'playback_controller.dart';
 import 'playback_gestures.dart';
+import 'playback_info.dart';
 import 'services/playback_engine.dart';
 
 class PlaybackScreen extends StatefulWidget {
@@ -40,6 +42,7 @@ class _PlaybackScreenState extends State<PlaybackScreen>
   final first = TextEditingController(text: '1'),
       last = TextEditingController(text: '1');
   bool choosing = false, preparing = false;
+  bool _showInfo = false;
   static const _platform = MethodChannel('dev.hongguo.studio/platform');
 
   /// 倍速属于播放器自身能力，放进控制栏，不占用页面布局。
@@ -59,6 +62,13 @@ class _PlaybackScreenState extends State<PlaybackScreen>
         bottomButtonBar: [
           const MaterialPositionIndicator(),
           const Spacer(),
+          IconButton(
+            tooltip: '播放信息 (I)',
+            iconSize: 20,
+            color: Colors.white,
+            onPressed: () => _setInfo(!_showInfo),
+            icon: const Icon(Icons.info_outline_rounded),
+          ),
           _speedButton(),
           const MaterialFullscreenButton(),
         ],
@@ -81,6 +91,7 @@ class _PlaybackScreenState extends State<PlaybackScreen>
         position: () => player.state.position,
         duration: () => player.state.duration,
         seek: player.seek,
+        onTogglePlay: () => unawaited(_togglePlay()),
         changeEpisode: (step) {
           final next = c.index + step;
           if (!c.loading &&
@@ -125,12 +136,39 @@ class _PlaybackScreenState extends State<PlaybackScreen>
       _native = NativePlaybackEngine();
       _video = VideoController(_native!.player);
     }
-    c = widget.controller ??
+    c =
+        widget.controller ??
         PlaybackController(
           engine: _native!,
           initialRate: widget.tasks.playbackRate,
+          onProgress: (episode, position) => widget.tasks.saveProgress(
+            widget.summary.id,
+            episode + 1,
+            position,
+          ),
         );
-    if (c.drama == null) unawaited(c.load(widget.summary.id));
+    if (c.drama == null) {
+      // 有上次观看位置就接着看，否则从第一集开始。
+      final resume = widget.tasks.progressFor(widget.summary.id);
+      unawaited(
+        c.load(
+          widget.summary.id,
+          resumeEpisode: resume?.episode,
+          resumePosition: resume?.position ?? Duration.zero,
+        ),
+      );
+      if (resume != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            SnackBar(
+              content: Text('已从 ${resume.label} 继续播放'),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        });
+      }
+    }
   }
 
   @override
@@ -141,10 +179,93 @@ class _PlaybackScreenState extends State<PlaybackScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _infoTimer?.cancel();
     if (widget.controller == null) c.dispose();
     first.dispose();
     last.dispose();
     super.dispose();
+  }
+
+  /// 播放器内快捷键：只在桌面端注册，不干扰移动端手势。
+  Map<ShortcutActivator, VoidCallback> get _shortcuts => {
+    const SingleActivator(LogicalKeyboardKey.space): () =>
+        unawaited(_togglePlay()),
+    const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
+        unawaited(_seekBy(-const Duration(seconds: 5))),
+    const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
+        unawaited(_seekBy(const Duration(seconds: 5))),
+    const SingleActivator(LogicalKeyboardKey.arrowLeft, shift: true): () =>
+        unawaited(_seekBy(-const Duration(seconds: 15))),
+    const SingleActivator(LogicalKeyboardKey.arrowRight, shift: true): () =>
+        unawaited(_seekBy(const Duration(seconds: 15))),
+    const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
+        unawaited(_changeVolume(.05)),
+    const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
+        unawaited(_changeVolume(-.05)),
+    const SingleActivator(LogicalKeyboardKey.keyF): () =>
+        unawaited(toggleFullscreen(context)),
+    const SingleActivator(LogicalKeyboardKey.keyM): () => unawaited(_mute()),
+    const SingleActivator(LogicalKeyboardKey.keyI): () =>
+        setState(() => _showInfo = !_showInfo),
+    const SingleActivator(LogicalKeyboardKey.comma): () =>
+        unawaited(_frameStep(-1)),
+    const SingleActivator(LogicalKeyboardKey.period): () =>
+        unawaited(_frameStep(1)),
+  };
+
+  Future<void> _togglePlay() async {
+    final player = _native?.player;
+    if (player == null) return;
+    await player.playOrPause();
+  }
+
+  Future<void> _seekBy(Duration delta) async {
+    final player = _native?.player;
+    if (player == null) return;
+    final total = player.state.duration;
+    final target = player.state.position + delta;
+    final clamped = target < Duration.zero
+        ? Duration.zero
+        : (total > Duration.zero && target > total ? total : target);
+    await player.seek(clamped);
+  }
+
+  Future<void> _changeVolume(double delta) async {
+    final player = _native?.player;
+    if (player == null) return;
+    final next = (player.state.volume + delta * 100).clamp(0.0, 100.0);
+    await player.setVolume(next);
+  }
+
+  Future<void> _mute() async {
+    final player = _native?.player;
+    if (player == null) return;
+    final next = player.state.volume > 0 ? 0.0 : 100.0;
+    await player.setVolume(next);
+  }
+
+  /// 帧步进依赖 mpv 命令；不支持的平台静默忽略。
+  Future<void> _frameStep(int direction) async {
+    final platform = _native?.player.platform;
+    if (platform is! NativePlayer) return;
+    try {
+      await platform.command([
+        direction > 0 ? 'frame-step' : 'frame-back-step',
+      ]);
+    } catch (_) {
+      /* 平台不支持帧步进时不影响其它操作。 */
+    }
+  }
+
+  /// 播放信息面板打开时刷新一次，关闭后不再定时读取。
+  Timer? _infoTimer;
+  void _setInfo(bool value) {
+    setState(() => _showInfo = value);
+    _infoTimer?.cancel();
+    if (!value) return;
+    _infoTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && _showInfo) setState(() {});
+    });
   }
 
   Future<void> _setRate(double value) async {
@@ -187,414 +308,442 @@ class _PlaybackScreenState extends State<PlaybackScreen>
       final pages = ((episodes.length + 49) ~/ 50).clamp(1, 10000);
       final rangePage = episodePage.clamp(0, pages - 1);
       final width = MediaQuery.sizeOf(context).width;
-      return Scaffold(
-        backgroundColor: const Color(0xFFF6F6F8),
-        appBar: AppBar(
-          backgroundColor: const Color(0xFFF6F6F8),
-          title: desktop
-              ? DragToMoveArea(
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: Text(
+      return Focus(
+        autofocus: true,
+        child: CallbackShortcuts(
+          bindings: desktop
+              ? _shortcuts
+              : const <ShortcutActivator, VoidCallback>{},
+          child: Scaffold(
+            backgroundColor: const Color(0xFFF6F6F8),
+            appBar: AppBar(
+              backgroundColor: const Color(0xFFF6F6F8),
+              title: desktop
+                  ? DragToMoveArea(
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: Text(
+                          c.drama?.title ?? widget.summary.title,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    )
+                  : Text(
                       c.drama?.title ?? widget.summary.title,
                       overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                )
-              : Text(
-                  c.drama?.title ?? widget.summary.title,
-                  overflow: TextOverflow.ellipsis,
+              actions: [
+                TextButton.icon(
+                  onPressed: widget.onTasks,
+                  icon: const Icon(Icons.downloading_outlined),
+                  label: const Text('任务管理'),
                 ),
-          actions: [
-            TextButton.icon(
-              onPressed: widget.onTasks,
-              icon: const Icon(Icons.downloading_outlined),
-              label: const Text('任务管理'),
+                if (desktop) ...[
+                  WindowCaptionButton.minimize(
+                    onPressed: () => windowManager.minimize(),
+                    brightness: Brightness.light,
+                  ),
+                  WindowCaptionButton.maximize(
+                    onPressed: () async {
+                      await windowManager.isMaximized()
+                          ? await windowManager.unmaximize()
+                          : await windowManager.maximize();
+                    },
+                    brightness: Brightness.light,
+                  ),
+                  WindowCaptionButton.close(
+                    onPressed: widget.onCloseWindow,
+                    brightness: Brightness.light,
+                  ),
+                ],
+              ],
             ),
-            if (desktop) ...[
-              WindowCaptionButton.minimize(
-                onPressed: () => windowManager.minimize(),
-                brightness: Brightness.light,
-              ),
-              WindowCaptionButton.maximize(
-                onPressed: () async {
-                  await windowManager.isMaximized()
-                      ? await windowManager.unmaximize()
-                      : await windowManager.maximize();
-                },
-                brightness: Brightness.light,
-              ),
-              WindowCaptionButton.close(
-                onPressed: widget.onCloseWindow,
-                brightness: Brightness.light,
-              ),
-            ],
-          ],
-        ),
-        body: SafeArea(
-          child: ListView(
-            padding: EdgeInsets.all(width < 600 ? 12 : 24),
-            children: [
-              Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 1100),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(18),
-                        child: AspectRatio(
-                          aspectRatio: width < 600 ? 9 / 12 : 16 / 9,
-                          child: ColoredBox(
-                            color: Colors.black,
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
-                                if (widget.videoBuilder != null)
-                                  widget.videoBuilder!()
-                                else
-                                  Video(
-                                    controller: _video!,
-                                    controls: _controls,
-                                  ),
-                                if (c.loading)
-                                  const IgnorePointer(
-                                    child: Center(
-                                      child: CircularProgressIndicator(),
-                                    ),
-                                  ),
-                                if (c.error != null)
-                                  Center(
-                                    child: Container(
-                                      margin: const EdgeInsets.all(16),
-                                      padding: const EdgeInsets.all(20),
-                                      decoration: BoxDecoration(
-                                        color: Colors.black87,
-                                        borderRadius: BorderRadius.circular(16),
+            body: SafeArea(
+              child: ListView(
+                padding: EdgeInsets.all(width < 600 ? 12 : 24),
+                children: [
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 1100),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(18),
+                            child: AspectRatio(
+                              aspectRatio: width < 600 ? 9 / 12 : 16 / 9,
+                              child: ColoredBox(
+                                color: Colors.black,
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    if (widget.videoBuilder != null)
+                                      widget.videoBuilder!()
+                                    else
+                                      Video(
+                                        controller: _video!,
+                                        controls: _controls,
                                       ),
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(
-                                            c.error!,
-                                            textAlign: TextAlign.center,
-                                            style: const TextStyle(
-                                              color: Colors.white,
+                                    if (_showInfo && _native != null)
+                                      PlaybackInfoPanel(
+                                        info: PlaybackInfo.fromState(
+                                          _native!.player.state,
+                                        ),
+                                        onClose: () => _setInfo(false),
+                                      ),
+                                    if (c.loading)
+                                      const IgnorePointer(
+                                        child: Center(
+                                          child: CircularProgressIndicator(),
+                                        ),
+                                      ),
+                                    if (c.error != null)
+                                      Center(
+                                        child: Container(
+                                          margin: const EdgeInsets.all(16),
+                                          padding: const EdgeInsets.all(20),
+                                          decoration: BoxDecoration(
+                                            color: Colors.black87,
+                                            borderRadius: BorderRadius.circular(
+                                              16,
                                             ),
                                           ),
-                                          const SizedBox(height: 12),
-                                          FilledButton(
-                                            onPressed: () => c.drama == null
-                                                ? c.load(widget.summary.id)
-                                                : c.play(c.index),
-                                            child: const Text('重试播放'),
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                c.error!,
+                                                textAlign: TextAlign.center,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 12),
+                                              FilledButton(
+                                                onPressed: () => c.drama == null
+                                                    ? c.load(widget.summary.id)
+                                                    : c.play(c.index),
+                                                child: const Text('重试播放'),
+                                              ),
+                                            ],
                                           ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 10,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              Text(
+                                episodes.isEmpty
+                                    ? '正在读取完整分集…'
+                                    : '第 ${episodes[c.index].number} 集 / 共 ${episodes.length} 集',
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: '上一集',
+                                onPressed: c.loading || c.index <= 0
+                                    ? null
+                                    : () => c.play(c.index - 1),
+                                icon: const Icon(Icons.skip_previous_rounded),
+                              ),
+                              IconButton(
+                                tooltip: '下一集',
+                                onPressed:
+                                    c.loading || c.index + 1 >= episodes.length
+                                    ? null
+                                    : () => c.play(c.index + 1),
+                                icon: const Icon(Icons.skip_next_rounded),
+                              ),
+                              if (c.variants.isNotEmpty)
+                                DropdownButton<int>(
+                                  value:
+                                      c.variants.any(
+                                        (v) => v.quality == c.quality,
+                                      )
+                                      ? c.quality
+                                      : 0,
+                                  items: [
+                                    const DropdownMenuItem(
+                                      value: 0,
+                                      child: Text('自动画质'),
+                                    ),
+                                    ...c.variants.map(
+                                      (v) => DropdownMenuItem(
+                                        value: v.quality,
+                                        child: Text(v.label),
+                                      ),
+                                    ),
+                                  ],
+                                  onChanged: c.loading
+                                      ? null
+                                      : (v) {
+                                          if (v != null) c.setQuality(v);
+                                        },
+                                ),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Text('自动连播'),
+                                  Switch(
+                                    value: c.autoAdvance,
+                                    onChanged: c.setAutoAdvance,
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 18),
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 10,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              SegmentedButton<bool>(
+                                style: const ButtonStyle(
+                                  side: WidgetStatePropertyAll(BorderSide.none),
+                                ),
+                                segments: const [
+                                  ButtonSegment(
+                                    value: false,
+                                    label: Text('播放选集'),
+                                    icon: Icon(Icons.play_arrow_rounded),
+                                  ),
+                                  ButtonSegment(
+                                    value: true,
+                                    label: Text('选择拼接'),
+                                    icon: Icon(Icons.video_library_outlined),
+                                  ),
+                                ],
+                                selected: {choosing},
+                                onSelectionChanged: (value) =>
+                                    setState(() => choosing = value.first),
+                              ),
+                              FilledButton.icon(
+                                onPressed:
+                                    preparing ||
+                                        widget.tasks.busy ||
+                                        widget.tasks.loading ||
+                                        c.selected.isEmpty
+                                    ? null
+                                    : _stitch,
+                                icon: const Icon(Icons.merge_rounded),
+                                label: Text(
+                                  preparing
+                                      ? '准备任务…'
+                                      : '拼接所选 ${c.selected.length} 集',
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (widget.tasks.busy)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 14),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  LinearProgressIndicator(
+                                    value: widget.tasks.progress,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(widget.tasks.status),
+                                ],
+                              ),
+                            ),
+                          if (choosing)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              child: Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  TextButton(
+                                    onPressed: () {
+                                      c.selectAll(false);
+                                      if (episodes.isNotEmpty) {
+                                        c.toggleSelection(
+                                          episodes[c.index].number,
+                                        );
+                                      }
+                                    },
+                                    child: const Text('只选当前集'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => c.selectAll(true),
+                                    child: const Text('全选'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => c.selectAll(false),
+                                    child: const Text('清空'),
+                                  ),
+                                  SizedBox(
+                                    width: 72,
+                                    child: TextField(
+                                      controller: first,
+                                      keyboardType: TextInputType.number,
+                                      decoration: const InputDecoration(
+                                        labelText: '起始',
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(
+                                    width: 72,
+                                    child: TextField(
+                                      controller: last,
+                                      keyboardType: TextInputType.number,
+                                      decoration: const InputDecoration(
+                                        labelText: '结束',
+                                      ),
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed: () {
+                                      final a = int.tryParse(first.text),
+                                          b = int.tryParse(last.text);
+                                      if (a == null ||
+                                          b == null ||
+                                          a < 1 ||
+                                          b < a ||
+                                          episodes.isEmpty ||
+                                          b > episodes.last.number) {
+                                        return;
+                                      }
+                                      c.selectRange(a, b);
+                                    },
+                                    child: const Text('选择范围'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          const SizedBox(height: 12),
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              final scale =
+                                  MediaQuery.textScalerOf(context).scale(13) /
+                                  13;
+                              final columns =
+                                  (constraints.maxWidth / (80 * scale))
+                                      .floor()
+                                      .clamp(1, 10);
+                              final start = rangePage * 50;
+                              final count = (episodes.length - start).clamp(
+                                0,
+                                50,
+                              );
+                              return GridView.builder(
+                                shrinkWrap: true,
+                                padding: EdgeInsets.zero,
+                                physics: const NeverScrollableScrollPhysics(),
+                                gridDelegate:
+                                    SliverGridDelegateWithFixedCrossAxisCount(
+                                      crossAxisCount: columns,
+                                      crossAxisSpacing: 8,
+                                      mainAxisSpacing: 8,
+                                      mainAxisExtent: 48 * scale,
+                                    ),
+                                itemCount: count,
+                                itemBuilder: (context, offset) {
+                                  final i = start + offset;
+                                  final number = episodes[i].number;
+                                  final selected = choosing
+                                      ? c.selected.contains(number)
+                                      : i == c.index;
+                                  final colors = Theme.of(context).colorScheme;
+                                  return Semantics(
+                                    selected: selected,
+                                    child: TextButton(
+                                      key: ValueKey('episode-$number'),
+                                      style: TextButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 6,
+                                        ),
+                                        backgroundColor: selected
+                                            ? colors.secondaryContainer
+                                            : Colors.white,
+                                        foregroundColor: selected
+                                            ? colors.onSecondaryContainer
+                                            : const Color(0xFF24242D),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                      ),
+                                      onPressed: () => choosing
+                                          ? c.toggleSelection(number)
+                                          : c.play(i),
+                                      child: Stack(
+                                        fit: StackFit.expand,
+                                        children: [
+                                          Center(
+                                            child: FittedBox(
+                                              fit: BoxFit.scaleDown,
+                                              child: Text(
+                                                '第 $number 集',
+                                                style: const TextStyle(
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          if (selected)
+                                            const Positioned(
+                                              right: 0,
+                                              top: 2,
+                                              child: Icon(
+                                                Icons.check_rounded,
+                                                size: 12,
+                                              ),
+                                            ),
                                         ],
                                       ),
                                     ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 10,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          Text(
-                            episodes.isEmpty
-                                ? '正在读取完整分集…'
-                                : '第 ${episodes[c.index].number} 集 / 共 ${episodes.length} 集',
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: '上一集',
-                            onPressed: c.loading || c.index <= 0
-                                ? null
-                                : () => c.play(c.index - 1),
-                            icon: const Icon(Icons.skip_previous_rounded),
-                          ),
-                          IconButton(
-                            tooltip: '下一集',
-                            onPressed:
-                                c.loading || c.index + 1 >= episodes.length
-                                ? null
-                                : () => c.play(c.index + 1),
-                            icon: const Icon(Icons.skip_next_rounded),
-                          ),
-                          if (c.variants.isNotEmpty)
-                            DropdownButton<int>(
-                              value:
-                                  c.variants.any((v) => v.quality == c.quality)
-                                  ? c.quality
-                                  : 0,
-                              items: [
-                                const DropdownMenuItem(
-                                  value: 0,
-                                  child: Text('自动画质'),
-                                ),
-                                ...c.variants.map(
-                                  (v) => DropdownMenuItem(
-                                    value: v.quality,
-                                    child: Text(v.label),
-                                  ),
-                                ),
-                              ],
-                              onChanged: c.loading
-                                  ? null
-                                  : (v) {
-                                      if (v != null) c.setQuality(v);
-                                    },
-                            ),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Text('自动连播'),
-                              Switch(
-                                value: c.autoAdvance,
-                                onChanged: c.setAutoAdvance,
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 18),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 10,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          SegmentedButton<bool>(
-                            style: const ButtonStyle(
-                              side: WidgetStatePropertyAll(BorderSide.none),
-                            ),
-                            segments: const [
-                              ButtonSegment(
-                                value: false,
-                                label: Text('播放选集'),
-                                icon: Icon(Icons.play_arrow_rounded),
-                              ),
-                              ButtonSegment(
-                                value: true,
-                                label: Text('选择拼接'),
-                                icon: Icon(Icons.video_library_outlined),
-                              ),
-                            ],
-                            selected: {choosing},
-                            onSelectionChanged: (value) =>
-                                setState(() => choosing = value.first),
-                          ),
-                          FilledButton.icon(
-                            onPressed:
-                                preparing ||
-                                    widget.tasks.busy ||
-                                    widget.tasks.loading ||
-                                    c.selected.isEmpty
-                                ? null
-                                : _stitch,
-                            icon: const Icon(Icons.merge_rounded),
-                            label: Text(
-                              preparing
-                                  ? '准备任务…'
-                                  : '拼接所选 ${c.selected.length} 集',
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (widget.tasks.busy)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 14),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              LinearProgressIndicator(
-                                value: widget.tasks.progress,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(widget.tasks.status),
-                            ],
-                          ),
-                        ),
-                      if (choosing)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          child: Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            children: [
-                              TextButton(
-                                onPressed: () {
-                                  c.selectAll(false);
-                                  if (episodes.isNotEmpty) {
-                                    c.toggleSelection(episodes[c.index].number);
-                                  }
+                                  );
                                 },
-                                child: const Text('只选当前集'),
-                              ),
-                              TextButton(
-                                onPressed: () => c.selectAll(true),
-                                child: const Text('全选'),
-                              ),
-                              TextButton(
-                                onPressed: () => c.selectAll(false),
-                                child: const Text('清空'),
-                              ),
-                              SizedBox(
-                                width: 72,
-                                child: TextField(
-                                  controller: first,
-                                  keyboardType: TextInputType.number,
-                                  decoration: const InputDecoration(
-                                    labelText: '起始',
-                                  ),
-                                ),
-                              ),
-                              SizedBox(
-                                width: 72,
-                                child: TextField(
-                                  controller: last,
-                                  keyboardType: TextInputType.number,
-                                  decoration: const InputDecoration(
-                                    labelText: '结束',
-                                  ),
-                                ),
-                              ),
-                              TextButton(
-                                onPressed: () {
-                                  final a = int.tryParse(first.text),
-                                      b = int.tryParse(last.text);
-                                  if (a == null ||
-                                      b == null ||
-                                      a < 1 ||
-                                      b < a ||
-                                      episodes.isEmpty ||
-                                      b > episodes.last.number) {
-                                    return;
-                                  }
-                                  c.selectRange(a, b);
-                                },
-                                child: const Text('选择范围'),
-                              ),
-                            ],
-                          ),
-                        ),
-                      const SizedBox(height: 12),
-                      LayoutBuilder(
-                        builder: (context, constraints) {
-                          final scale =
-                              MediaQuery.textScalerOf(context).scale(13) / 13;
-                          final columns = (constraints.maxWidth / (80 * scale))
-                              .floor()
-                              .clamp(1, 10);
-                          final start = rangePage * 50;
-                          final count = (episodes.length - start).clamp(0, 50);
-                          return GridView.builder(
-                            shrinkWrap: true,
-                            padding: EdgeInsets.zero,
-                            physics: const NeverScrollableScrollPhysics(),
-                            gridDelegate:
-                                SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: columns,
-                                  crossAxisSpacing: 8,
-                                  mainAxisSpacing: 8,
-                                  mainAxisExtent: 48 * scale,
-                                ),
-                            itemCount: count,
-                            itemBuilder: (context, offset) {
-                              final i = start + offset;
-                              final number = episodes[i].number;
-                              final selected = choosing
-                                  ? c.selected.contains(number)
-                                  : i == c.index;
-                              final colors = Theme.of(context).colorScheme;
-                              return Semantics(
-                                selected: selected,
-                                child: TextButton(
-                                  key: ValueKey('episode-$number'),
-                                  style: TextButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                    ),
-                                    backgroundColor: selected
-                                        ? colors.secondaryContainer
-                                        : Colors.white,
-                                    foregroundColor: selected
-                                        ? colors.onSecondaryContainer
-                                        : const Color(0xFF24242D),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                  ),
-                                  onPressed: () => choosing
-                                      ? c.toggleSelection(number)
-                                      : c.play(i),
-                                  child: Stack(
-                                    fit: StackFit.expand,
-                                    children: [
-                                      Center(
-                                        child: FittedBox(
-                                          fit: BoxFit.scaleDown,
-                                          child: Text(
-                                            '第 $number 集',
-                                            style: const TextStyle(
-                                              fontSize: 13,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      if (selected)
-                                        const Positioned(
-                                          right: 0,
-                                          top: 2,
-                                          child: Icon(
-                                            Icons.check_rounded,
-                                            size: 12,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
                               );
                             },
-                          );
-                        },
+                          ),
+                          if (pages > 1)
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                TextButton(
+                                  onPressed: rangePage == 0
+                                      ? null
+                                      : () => setState(
+                                          () => episodePage = rangePage - 1,
+                                        ),
+                                  child: const Text('前 50 集'),
+                                ),
+                                Text('${rangePage + 1} / $pages'),
+                                TextButton(
+                                  onPressed: rangePage + 1 == pages
+                                      ? null
+                                      : () => setState(
+                                          () => episodePage = rangePage + 1,
+                                        ),
+                                  child: const Text('后 50 集'),
+                                ),
+                              ],
+                            ),
+                          const SizedBox(height: 20),
+                        ],
                       ),
-                      if (pages > 1)
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            TextButton(
-                              onPressed: rangePage == 0
-                                  ? null
-                                  : () => setState(
-                                      () => episodePage = rangePage - 1,
-                                    ),
-                              child: const Text('前 50 集'),
-                            ),
-                            Text('${rangePage + 1} / $pages'),
-                            TextButton(
-                              onPressed: rangePage + 1 == pages
-                                  ? null
-                                  : () => setState(
-                                      () => episodePage = rangePage + 1,
-                                    ),
-                              child: const Text('后 50 集'),
-                            ),
-                          ],
-                        ),
-                      const SizedBox(height: 20),
-                    ],
+                    ),
                   ),
-                ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       );

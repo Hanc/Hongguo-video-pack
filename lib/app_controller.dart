@@ -37,9 +37,56 @@ class StudioController extends ChangeNotifier {
   String? _restoreId;
   List<int> _restoreSelection = [];
   int _restoreQuality = 0;
+
+  /// 每部剧的观看进度，用于下次继续播放。只保留最近 50 部，避免设置膨胀。
+  static const progressLimit = 50;
+  final watchProgress = <String, PlayProgress>{};
   @override
   void notifyListeners() {
     if (!_disposed) super.notifyListeners();
+  }
+
+  void _restoreProgress(dynamic raw) {
+    watchProgress.clear();
+    if (raw is! Map) return;
+    for (final entry in raw.entries) {
+      final id = '${entry.key}';
+      final item = entry.value;
+      if (id.isEmpty || item is! Map) continue;
+      final episode = item['episode'], seconds = item['seconds'];
+      if (episode is! int || seconds is! int) continue;
+      if (episode < 1 || seconds < 0) continue;
+      watchProgress[id] = PlayProgress(
+        episode,
+        Duration(seconds: seconds),
+        '${item['updated'] ?? ''}',
+      );
+    }
+  }
+
+  PlayProgress? progressFor(String dramaId) => watchProgress[dramaId];
+
+  /// 保存观看位置；开头几秒没有恢复价值，直接跳过。
+  void saveProgress(String dramaId, int episode, Duration position) {
+    if (_disposed || dramaId.isEmpty || episode < 1) return;
+    if (position < const Duration(seconds: 5)) return;
+    watchProgress[dramaId] = PlayProgress(
+      episode,
+      position,
+      DateTime.now().toIso8601String(),
+    );
+    if (watchProgress.length > progressLimit) {
+      final ordered = watchProgress.entries.toList()
+        ..sort((a, b) => b.value.updated.compareTo(a.value.updated));
+      watchProgress
+        ..clear()
+        ..addEntries(ordered.take(progressLimit));
+    }
+    _save();
+  }
+
+  void clearProgress(String dramaId) {
+    if (watchProgress.remove(dramaId) != null) _save();
   }
 
   Future<void> initialize(File store, String defaultOutput) async {
@@ -62,6 +109,7 @@ class StudioController extends ChangeNotifier {
         playbackRate = PlaybackController.nearestSpeed(
           (data['playbackRate'] as num?)?.toDouble() ?? 1,
         );
+        _restoreProgress(data['progress']);
         for (final item in data['history'] as List? ?? []) {
           if (item is Map &&
               item['title'] is String &&
@@ -105,6 +153,14 @@ class StudioController extends ChangeNotifier {
       'dramaId': drama?.id,
       'selected': selected.toList()..sort(),
       'quality': quality,
+      'progress': {
+        for (final entry in watchProgress.entries)
+          entry.key: {
+            'episode': entry.value.episode,
+            'seconds': entry.value.position.inSeconds,
+            'updated': entry.value.updated,
+          },
+      },
     });
     _persistTail = _persistTail.then((_) async {
       try {
@@ -459,6 +515,25 @@ class StudioController extends ChangeNotifier {
     _disposed = true;
     client.close();
     super.dispose();
+  }
+}
+
+/// 一部剧上次看到哪里。
+class PlayProgress {
+  const PlayProgress(this.episode, this.position, this.updated);
+
+  /// 分集序号，从 1 开始。
+  final int episode;
+  final Duration position;
+
+  /// ISO8601 时间戳，用于淘汰旧记录。
+  final String updated;
+
+  /// 恢复用的展示文案，例如「第 3 集 · 2:05」。
+  String get label {
+    final minutes = position.inMinutes;
+    final seconds = (position.inSeconds % 60).toString().padLeft(2, '0');
+    return '第 $episode 集 · $minutes:$seconds';
   }
 }
 

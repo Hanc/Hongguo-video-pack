@@ -72,4 +72,58 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('double tap seeks 10s and toggles playback in the middle', (
+    tester,
+  ) async {
+    final seeks = <Duration>[];
+    var toggles = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: 800,
+              height: 400,
+              child: PlaybackGestures(
+                position: () => const Duration(seconds: 30),
+                duration: () => const Duration(seconds: 60),
+                seek: (value) async => seeks.add(value),
+                changeEpisode: (_) {},
+                levels: () async => (.5, .5),
+                setLevel: (_, _) async {},
+                onTogglePlay: () => toggles++,
+                child: const ColoredBox(color: Colors.black),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    Future<void> doubleTapAt(Offset point) async {
+      await tester.tapAt(point);
+      await tester.pump(const Duration(milliseconds: 30));
+      await tester.tapAt(point);
+      await tester.pump();
+    }
+
+    // 右侧三分之一：前进 10 秒（30 → 40）。
+    await doubleTapAt(const Offset(760, 200));
+    expect(seeks.last, const Duration(seconds: 40));
+    // 左侧三分之一：后退 10 秒（30 → 20）。
+    await doubleTapAt(const Offset(40, 200));
+    expect(seeks.last, const Duration(seconds: 20));
+    // 中间：切换播放/暂停，不跳转。
+    final before = seeks.length;
+    await doubleTapAt(const Offset(400, 200));
+    expect(toggles, 1);
+    expect(seeks.length, before);
+
+    // 收尾：让提示浮层的计时器结束，避免留下未完成的 Timer。
+    await tester.pump(const Duration(seconds: 1));
+    expect(tester.takeException(), isNull);
+  });
 }

@@ -13,6 +13,7 @@ class PlaybackGestures extends StatefulWidget {
     required this.changeEpisode,
     required this.levels,
     required this.setLevel,
+    this.onTogglePlay,
     this.onDispose,
   });
   final Widget child;
@@ -21,6 +22,7 @@ class PlaybackGestures extends StatefulWidget {
   final void Function(int) changeEpisode;
   final Future<(double, double)> Function() levels;
   final Future<void> Function(bool brightness, double value) setLevel;
+  final VoidCallback? onTogglePlay;
   final VoidCallback? onDispose;
   @override
   State<PlaybackGestures> createState() => _PlaybackGesturesState();
@@ -38,6 +40,68 @@ class _PlaybackGesturesState extends State<PlaybackGestures> {
   int generation = 0;
   bool writing = false;
   (bool, double)? pending;
+  DateTime? _lastTapAt;
+  Offset? _lastTapPoint;
+
+  /// 双击快进/快退的步长。
+  static const doubleTapStep = Duration(seconds: 10);
+
+  /// 双击判定窗口；比系统默认略宽，方便手指操作。
+  static const doubleTapWindow = Duration(milliseconds: 350);
+
+  /// 在 Listener 里自行判定双击：不额外创建计时器，避免与拖动手势竞争。
+  void _registerTap(Offset point) {
+    final last = _lastTapAt, lastPoint = _lastTapPoint;
+    final now = DateTime.now();
+    if (last != null &&
+        lastPoint != null &&
+        now.difference(last) <= doubleTapWindow &&
+        (point - lastPoint).distance <= 48) {
+      _lastTapAt = null;
+      _lastTapPoint = null;
+      _handleDoubleTapAt(point);
+      return;
+    }
+    _lastTapAt = now;
+    _lastTapPoint = point;
+  }
+
+  /// 双击：左三分之一后退、右三分之一前进、中间播放/暂停。
+  void _handleDoubleTapAt(Offset point) {
+    final width = context.size?.width ?? 0;
+    if (width <= 0) return;
+    if (point.dx < width / 3) {
+      unawaited(_jump(-doubleTapStep, '后退 10 秒'));
+    } else if (point.dx > width * 2 / 3) {
+      unawaited(_jump(doubleTapStep, '前进 10 秒'));
+    } else {
+      widget.onTogglePlay?.call();
+    }
+  }
+
+  Future<void> _jump(Duration delta, String label) async {
+    final total = widget.duration();
+    if (total <= Duration.zero) return;
+    final target = widget.position() + delta;
+    final clamped = target < Duration.zero
+        ? Duration.zero
+        : (target > total ? total : target);
+    try {
+      await widget.seek(clamped);
+      if (!mounted) return;
+      _flash(label);
+    } catch (_) {
+      if (mounted) _flash('跳转失败，请重试');
+    }
+  }
+
+  void _flash(String label) {
+    timer?.cancel();
+    setState(() => hint = label);
+    timer = Timer(const Duration(milliseconds: 700), () {
+      if (mounted) setState(() => hint = null);
+    });
+  }
 
   @override
   void initState() {
@@ -93,13 +157,21 @@ class _PlaybackGesturesState extends State<PlaybackGestures> {
           delta.dy.abs() >= 64) {
         widget.changeEpisode(delta.dy < 0 ? 1 : -1);
       }
+    } else if (!cancel &&
+        horizontal == null &&
+        start != null &&
+        delta.distance < 16) {
+      // 没有位移，视为点击；连续两次即双击。
+      _registerTap(start!);
     }
     pointer = null;
     start = null;
     timer?.cancel();
-    timer = Timer(const Duration(milliseconds: 900), () {
-      if (mounted) setState(() => hint = null);
-    });
+    if (hint != null) {
+      timer = Timer(const Duration(milliseconds: 900), () {
+        if (mounted) setState(() => hint = null);
+      });
+    }
   }
 
   @override

@@ -12,12 +12,15 @@ class FakePlaybackEngine implements PlaybackEngine {
   bool paused = false, disposed = false;
   double rate = 1;
   Duration currentPosition = Duration.zero;
+  Duration currentDuration = Duration.zero;
   @override
   Stream<bool> get completed => end.stream;
   @override
   Stream<String> get errors => failure.stream;
   @override
   Duration get position => currentPosition;
+  @override
+  Duration get duration => currentDuration;
   @override
   Future<void> open(
     MediaVariant media, {
@@ -160,24 +163,70 @@ void main() {
       expect(client.calls, contains('3'));
     },
   );
-  test('playback rate is clamped to a supported speed and reaches the engine', () async {
-    final engine = FakePlaybackEngine();
-    final c = PlaybackController(
-      engine: engine,
-      client: FakePlaybackClient(),
-      initialRate: 1.4,
-    );
+  test(
+    'playback rate is clamped to a supported speed and reaches the engine',
+    () async {
+      final engine = FakePlaybackEngine();
+      final c = PlaybackController(
+        engine: engine,
+        client: FakePlaybackClient(),
+        initialRate: 1.4,
+      );
+      addTearDown(c.dispose);
+      await c.load('123');
+      expect(c.rate, 1.5);
+      expect(engine.rate, 1.5);
+      await c.setRate(2);
+      expect(c.rate, 2);
+      expect(engine.rate, 2);
+      await c.setRate(1);
+      expect(c.rate, 1);
+      expect(engine.rate, 1);
+      expect(PlaybackController.speedLabel(1), '1.0x');
+      expect(PlaybackController.speedLabel(1.25), '1.25x');
+    },
+  );
+
+  test('resumes from a remembered episode and position', () async {
+    final engine = FakePlaybackEngine(), client = FakePlaybackClient();
+    final c = PlaybackController(engine: engine, client: client);
     addTearDown(c.dispose);
-    await c.load('123');
-    expect(c.rate, 1.5);
-    expect(engine.rate, 1.5);
-    await c.setRate(2);
-    expect(c.rate, 2);
-    expect(engine.rate, 2);
-    await c.setRate(1);
-    expect(c.rate, 1);
-    expect(engine.rate, 1);
-    expect(PlaybackController.speedLabel(1), '1.0x');
-    expect(PlaybackController.speedLabel(1.25), '1.25x');
+    await c.load(
+      '123',
+      resumeEpisode: 3,
+      resumePosition: const Duration(seconds: 125),
+    );
+    // 第 3 集对应下标 2，并带上续播位置。
+    expect(c.index, 2);
+    expect(engine.opened.single.url, 'https://example.com/3.mp4');
+    expect(engine.starts.single, const Duration(seconds: 125));
   });
+
+  test(
+    'reports progress on episode change but not at the tail of an episode',
+    () async {
+      final engine = FakePlaybackEngine(), client = FakePlaybackClient();
+      final reported = <(int, Duration)>[];
+      final c = PlaybackController(
+        engine: engine,
+        client: client,
+        onProgress: (episode, position) => reported.add((episode, position)),
+      );
+      addTearDown(c.dispose);
+      await c.load('123');
+      // 正常播放中途切集：应上报第 1 集（下标 0）与当前位置。
+      engine.currentPosition = const Duration(seconds: 40);
+      engine.currentDuration = const Duration(seconds: 100);
+      await c.play(1);
+      expect(reported.single.$1, 0);
+      expect(reported.single.$2, const Duration(seconds: 40));
+
+      // 已经播到片尾：不应记录，否则下次会从结尾恢复。
+      reported.clear();
+      engine.currentPosition = const Duration(seconds: 99);
+      engine.currentDuration = const Duration(seconds: 100);
+      await c.play(2);
+      expect(reported, isEmpty);
+    },
+  );
 }

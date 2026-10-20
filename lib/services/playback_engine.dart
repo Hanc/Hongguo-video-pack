@@ -9,12 +9,12 @@ import '../playback_controller.dart';
 /// 预开第二条通道——两个实例会带来全屏暂停、暂停后仍有声音等问题。
 class NativePlaybackEngine implements PlaybackEngine {
   NativePlaybackEngine()
-      : player = Player(
-          configuration: const PlayerConfiguration(
-            title: '红葡萄',
-            bufferSize: 32 * 1024 * 1024,
-          ),
-        );
+    : player = Player(
+        configuration: const PlayerConfiguration(
+          title: '红葡萄',
+          bufferSize: 32 * 1024 * 1024,
+        ),
+      );
 
   final Player player;
   bool _configured = false;
@@ -26,6 +26,8 @@ class NativePlaybackEngine implements PlaybackEngine {
   Stream<String> get errors => player.stream.error;
   @override
   Duration get position => player.state.position;
+  @override
+  Duration get duration => player.state.duration;
 
   @override
   Future<void> open(
@@ -40,7 +42,8 @@ class NativePlaybackEngine implements PlaybackEngine {
       await native.setProperty('demuxer-max-bytes', '${32 * 1024 * 1024}');
       _configured = true;
     }
-    if (media.key != null && !RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(media.key!)) {
+    if (media.key != null &&
+        !RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(media.key!)) {
       throw StateError('媒体授权数据无效');
     }
     // Stop the previous demuxer before changing a per-episode CENC key.
