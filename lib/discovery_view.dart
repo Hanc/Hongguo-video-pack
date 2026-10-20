@@ -37,7 +37,9 @@ class _DiscoveryViewState extends State<DiscoveryView> {
     super.dispose();
   }
 
-  /// 追剧列表：横向卡片，显示上次看到第几集与位置，点一下直接续播。
+  /// 首页只展示最近 5 部，避免单行滑轨越堆越长；更早的进「观看记录」。
+  static const recentLimit = 5;
+
   Widget _continueWatching() {
     final tasks = widget.tasks;
     if (tasks == null) return const SizedBox.shrink();
@@ -46,6 +48,7 @@ class _DiscoveryViewState extends State<DiscoveryView> {
       builder: (context, _) {
         final items = tasks.followedList;
         if (items.isEmpty) return const SizedBox.shrink();
+        final recent = items.take(recentLimit).toList();
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -67,14 +70,20 @@ class _DiscoveryViewState extends State<DiscoveryView> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  '${items.length} 部',
+                  '最近 ${recent.length} 部',
                   style: const TextStyle(fontSize: 12, color: _muted),
                 ),
                 const Spacer(),
-                if (items.length > 1)
-                  Text(
-                    '最近观看优先',
-                    style: const TextStyle(fontSize: 11, color: _muted),
+                if (items.length > recentLimit)
+                  TextButton.icon(
+                    onPressed: () => _showHistory(tasks),
+                    icon: const Icon(Icons.history_rounded, size: 16),
+                    label: Text('观看记录 ${items.length}'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: _accent,
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
                   ),
               ],
             ),
@@ -83,15 +92,117 @@ class _DiscoveryViewState extends State<DiscoveryView> {
               height: 92,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
-                itemCount: items.length,
+                itemCount: recent.length,
                 separatorBuilder: (_, _) => const SizedBox(width: 10),
-                itemBuilder: (context, i) => _continueCard(tasks, items[i]),
+                itemBuilder: (context, i) => _continueCard(tasks, recent[i]),
               ),
             ),
             const SizedBox(height: 22),
           ],
         );
       },
+    );
+  }
+
+  /// 完整观看记录：纵向列表，可滚动，适合条目多的情况。
+  void _showHistory(StudioController tasks) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('观看记录'),
+        contentPadding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+        content: SizedBox(
+          width: 520,
+          height: 420,
+          child: ListenableBuilder(
+            listenable: tasks,
+            builder: (context, _) {
+              final items = tasks.followedList;
+              if (items.isEmpty) {
+                return const Center(child: Text('还没有观看记录'));
+              }
+              return ListView.separated(
+                itemCount: items.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, i) {
+                  final item = items[i];
+                  final progress = tasks.progressFor(item.id);
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: SizedBox(
+                        width: 40,
+                        height: 54,
+                        child: item.cover.isEmpty
+                            ? const ColoredBox(
+                                color: Color(0xFFEDEDF2),
+                                child: Icon(
+                                  Icons.movie_outlined,
+                                  size: 16,
+                                  color: _muted,
+                                ),
+                              )
+                            : Image.network(
+                                item.cover,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) => const ColoredBox(
+                                  color: Color(0xFFEDEDF2),
+                                  child: Icon(
+                                    Icons.movie_outlined,
+                                    size: 16,
+                                    color: _muted,
+                                  ),
+                                ),
+                              ),
+                      ),
+                    ),
+                    title: Text(
+                      item.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                    subtitle: Text(
+                      progress?.label ?? '未开始',
+                      style: const TextStyle(fontSize: 11, color: _muted),
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextButton(
+                          onPressed: () {
+                            Navigator.of(dialogContext).pop();
+                            widget.onPlay?.call(
+                              DramaSummary(
+                                id: item.id,
+                                title: item.title,
+                                cover: item.cover,
+                              ),
+                            );
+                          },
+                          child: const Text('继续'),
+                        ),
+                        IconButton(
+                          tooltip: '从记录中移除',
+                          icon: const Icon(Icons.close_rounded, size: 16),
+                          onPressed: () => tasks.unfollowDrama(item.id),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
     );
   }
 

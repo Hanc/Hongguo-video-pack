@@ -181,4 +181,40 @@ void main() {
     expect(picked, 1.5);
     expect(tester.takeException(), isNull);
   });
+
+  // 全屏返回按钮必须真的能退出：这里覆盖「拿不到全屏上下文」时的兜底路径，
+  // 也就是之前点击无反应的那条。
+  testWidgets('fullscreen back button always closes the fullscreen route', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        const Scaffold(body: Center(child: FullscreenBackButton())),
+                  ),
+                ),
+                child: const Text('进入全屏'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('进入全屏'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('退出全屏'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('退出全屏'));
+    await tester.pumpAndSettle();
+    // 回到上一页，说明按钮确实退出了全屏路由。
+    expect(find.text('进入全屏'), findsOneWidget);
+    expect(find.byTooltip('退出全屏'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }

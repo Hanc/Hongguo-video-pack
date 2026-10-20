@@ -77,16 +77,17 @@ class _PlaybackScreenState extends State<PlaybackScreen>
         ],
       );
 
-  /// 全屏路由里的返回按钮：调用 media_kit 的退出全屏，和右下角按钮同一条路径。
-  Widget _fullscreenBackButton() => IconButton(
-    tooltip: '退出全屏 (Esc)',
-    color: Colors.white,
-    onPressed: () => unawaited(exitFullscreen(context)),
-    icon: const Icon(Icons.arrow_back_rounded),
-  );
+  /// 全屏路由里的返回按钮。
+  ///
+  /// 组件内部用 [Builder] 取全屏路由内的 context：`exitFullscreen` 依赖
+  /// `FullscreenInheritedWidget`，播放页 State 的 context 在路由之外，
+  /// 直接用它会让 `isFullscreen` 永远为 false。
+  Widget _fullscreenBackButton() => const FullscreenBackButton();
 
   Widget _controls(VideoState state) => Builder(
     builder: (context) {
+      // 全屏是 media_kit push 的独立路由，只有这里能拿到准确的 isFullscreen。
+      _syncFullscreen(isFullscreen(context));
       final themed = MaterialVideoControlsTheme(
         normal: _controlsTheme(),
         fullscreen: _controlsTheme(fullscreen: true),
@@ -202,6 +203,8 @@ class _PlaybackScreenState extends State<PlaybackScreen>
     HardwareKeyboard.instance.removeHandler(_onKeyEvent);
     WidgetsBinding.instance.removeObserver(this);
     _infoTimer?.cancel();
+    // 离开播放页时不能把设备锁在横屏。
+    if (_fullscreen) unawaited(_applyOrientation(false));
     if (widget.controller == null) c.dispose();
     first.dispose();
     last.dispose();
@@ -278,6 +281,33 @@ class _PlaybackScreenState extends State<PlaybackScreen>
       return true;
     });
     return editing;
+  }
+
+  /// 由 controls 的 build 驱动，只有真正变化时才动作，避免反复请求方向。
+  void _syncFullscreen(bool fullscreen) {
+    if (_fullscreen == fullscreen) return;
+    _fullscreen = fullscreen;
+    if (desktop) return;
+    unawaited(_applyOrientation(fullscreen));
+  }
+
+  /// 全屏转横屏、退出转回竖屏；顺带切换沉浸式状态栏。
+  Future<void> _applyOrientation(bool fullscreen) async {
+    try {
+      await SystemChrome.setPreferredOrientations(
+        fullscreen
+            ? const [
+                DeviceOrientation.landscapeLeft,
+                DeviceOrientation.landscapeRight,
+              ]
+            : const [DeviceOrientation.portraitUp],
+      );
+      await SystemChrome.setEnabledSystemUIMode(
+        fullscreen ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge,
+      );
+    } catch (_) {
+      /* 桌面或不允许旋转的容器里静默跳过。 */
+    }
   }
 
   Future<void> _togglePlay() async {
@@ -444,18 +474,6 @@ class _PlaybackScreenState extends State<PlaybackScreen>
                                       Video(
                                         controller: _video!,
                                         controls: _controls,
-                                        onEnterFullscreen: () async {
-                                          if (mounted) {
-                                            setState(() => _fullscreen = true);
-                                          }
-                                        },
-                                        onExitFullscreen: () async {
-                                          if (mounted) {
-                                            setState(
-                                              () => _fullscreen = false,
-                                            );
-                                          }
-                                        },
                                       ),
                                     if (_showInfo && _native != null)
                                       PlaybackInfoPanel(
@@ -823,6 +841,30 @@ class _PlaybackScreenState extends State<PlaybackScreen>
 }
 
 /// 播放器控制栏里的倍速入口：显示当前倍速，点击选择新档位。
+/// 全屏左上角的返回按钮。
+///
+/// 优先按 media_kit 的方式退出全屏；拿不到全屏上下文时直接关闭承载全屏的
+/// 路由。两条路都能退出，避免出现「按钮在但点了没反应」。
+class FullscreenBackButton extends StatelessWidget {
+  const FullscreenBackButton({super.key});
+
+  @override
+  Widget build(BuildContext context) => Builder(
+    builder: (context) => IconButton(
+      tooltip: '退出全屏',
+      color: Colors.white,
+      onPressed: () {
+        if (isFullscreen(context)) {
+          unawaited(exitFullscreen(context));
+        } else {
+          Navigator.of(context, rootNavigator: true).maybePop();
+        }
+      },
+      icon: const Icon(Icons.arrow_back_rounded),
+    ),
+  );
+}
+
 class PlaybackSpeedButton extends StatelessWidget {
   const PlaybackSpeedButton({
     super.key,
