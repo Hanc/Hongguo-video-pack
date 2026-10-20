@@ -200,6 +200,103 @@ Future<void> _waitForPicture(Player player) async {
   throw StateError('No picture after switch');
 }
 
+/// 验证全屏链路：`Video.onEnterFullscreen` 是否真的被调用、全屏路由里的
+/// controls 能否看到 `isFullscreen == true`、退出时 `onExitFullscreen` 是否触发。
+///
+/// 方向本身由平台执行，这里验证的是我们依赖的事件源是否成立。
+Future<void> runFullscreenAcceptance() async {
+  final directory = await Directory(
+    '.local/fullscreen-acceptance',
+  ).create(recursive: true);
+  final report = <String, dynamic>{
+    'platform': Platform.operatingSystem,
+    'passed': false,
+  };
+  final engine = NativePlaybackEngine();
+  final video = VideoController(engine.player);
+  var entered = 0, exited = 0;
+  var controlsSawFullscreen = false;
+  var controlsBuilds = 0;
+  BuildContext? videoContext;
+  final done = Completer<void>();
+
+  runApp(
+    MaterialApp(
+      home: Builder(
+        builder: (pageContext) {
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            try {
+              await Future<void>.delayed(const Duration(milliseconds: 500));
+              // enterFullscreen 需要 Video 之下的 context，否则找不到
+              // VideoStateInheritedWidget。这个 context 从 controls 回调里取。
+              final target = videoContext;
+              if (target == null || !target.mounted) {
+                throw StateError('未取得视频上下文');
+              }
+              await enterFullscreen(target);
+              await Future<void>.delayed(const Duration(milliseconds: 900));
+              report['entered'] = entered;
+              report['controlsBuilds'] = controlsBuilds;
+              report['controlsSawFullscreen'] = controlsSawFullscreen;
+              if (!pageContext.mounted) throw StateError('页面已卸载');
+              report['pageContextFullscreen'] = isFullscreen(pageContext);
+              if (!target.mounted) throw StateError('视频上下文已卸载');
+              Navigator.of(target, rootNavigator: true).maybePop();
+              await Future<void>.delayed(const Duration(milliseconds: 700));
+              report['exited'] = exited;
+              report['passed'] =
+                  entered == 1 &&
+                  exited == 1 &&
+                  controlsSawFullscreen == true;
+            } catch (error) {
+              report['error'] = _describe(error);
+            } finally {
+              if (!done.isCompleted) done.complete();
+            }
+          });
+          return Scaffold(
+            backgroundColor: Colors.black,
+            body: Center(
+              child: Video(
+                controller: video,
+                controls: (state) => Builder(
+                  builder: (controlsContext) {
+                    controlsBuilds++;
+                    videoContext ??= controlsContext;
+                    if (isFullscreen(controlsContext)) {
+                      controlsSawFullscreen = true;
+                    }
+                    return const SizedBox.shrink();
+                  },
+                ),
+                onEnterFullscreen: () async {
+                  entered++;
+                },
+                onExitFullscreen: () async {
+                  exited++;
+                },
+              ),
+            ),
+          );
+        },
+      ),
+    ),
+  );
+
+  await done.future.timeout(
+    const Duration(seconds: 30),
+    onTimeout: () {
+      report['error'] = '全屏验收超时';
+    },
+  );
+  runApp(const SizedBox.shrink());
+  await WidgetsBinding.instance.endOfFrame;
+  await engine.dispose();
+  await File(
+    '${directory.path}/result.json',
+  ).writeAsString(jsonEncode(report));
+}
+
 /// 只回传本项目自己的错误文案，不含地址、签名或密钥。
 String _describe(Object error) {
   if (error is StateError) return error.message.toString();

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -104,19 +105,10 @@ class _PlaybackScreenState extends State<PlaybackScreen>
         fullscreen: _controlsTheme(fullscreen: true),
         child: MaterialVideoControls(state),
       );
-      // 这个 controls 会被播放页和全屏路由各用一次。只按「本次 build 的
-      // isFullscreen」去改方向，会让播放页那次把屏幕转回竖屏，形成来回跳。
-      // 所以只在全屏控件真正出现/销毁时切换方向。
-      final oriented = fullscreen
-          ? FullscreenOrientationScope(
-              onChange: _syncFullscreen,
-              child: themed,
-            )
-          : themed;
-      if (desktop) return oriented;
+      if (desktop) return themed;
       if (!fullscreen ||
           MediaQuery.orientationOf(context) != Orientation.landscape) {
-        return oriented;
+        return themed;
       }
       final player = _native!.player;
       return PlaybackGestures(
@@ -150,7 +142,7 @@ class _PlaybackScreenState extends State<PlaybackScreen>
               .invokeMethod<void>('resetPlaybackBrightness')
               .catchError((Object _) {}),
         ),
-        child: oriented,
+        child: themed,
       );
     },
   );
@@ -303,16 +295,12 @@ class _PlaybackScreenState extends State<PlaybackScreen>
     return editing;
   }
 
-  /// 由 controls 的 build 驱动，只有真正变化时才动作，避免反复请求方向。
-  void _syncFullscreen(bool fullscreen) {
-    if (_fullscreen == fullscreen) return;
-    _fullscreen = fullscreen;
-    if (desktop) return;
-    unawaited(_applyOrientation(fullscreen));
-  }
-
   /// 全屏转横屏、退出转回竖屏；顺带切换沉浸式状态栏。
+  ///
+  /// 只在移动端执行。这里用 [Platform] 而不是 `Theme.of(context).platform`，
+  /// 因为回调发生在全屏路由里，那个位置的主题未必可靠。
   Future<void> _applyOrientation(bool fullscreen) async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
     try {
       await SystemChrome.setPreferredOrientations(
         fullscreen
@@ -326,7 +314,7 @@ class _PlaybackScreenState extends State<PlaybackScreen>
         fullscreen ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge,
       );
     } catch (_) {
-      /* 桌面或不允许旋转的容器里静默跳过。 */
+      /* 不允许旋转的容器里静默跳过。 */
     }
   }
 
@@ -494,6 +482,23 @@ class _PlaybackScreenState extends State<PlaybackScreen>
                                       Video(
                                         controller: _video!,
                                         controls: _controls,
+                                        // 这两个回调是 media_kit 明确的一次性事件：
+                                        // enterFullscreen 在 push 路由后调用，
+                                        // 退出时由 FullscreenInheritedWidget 调用。
+                                        onEnterFullscreen: () async {
+                                          if (mounted) {
+                                            setState(() => _fullscreen = true);
+                                          }
+                                          await _applyOrientation(true);
+                                        },
+                                        onExitFullscreen: () async {
+                                          if (mounted) {
+                                            setState(
+                                              () => _fullscreen = false,
+                                            );
+                                          }
+                                          await _applyOrientation(false);
+                                        },
                                       ),
                                     if (_showInfo && _native != null)
                                       PlaybackInfoPanel(
@@ -861,43 +866,6 @@ class _PlaybackScreenState extends State<PlaybackScreen>
 }
 
 /// 播放器控制栏里的倍速入口：显示当前倍速，点击选择新档位。
-/// 只在全屏控件真正创建与销毁时回调一次。
-///
-/// 播放页与全屏路由共用同一个 controls 构建函数，若按「本次 build 是否全屏」
-/// 去改屏幕方向，播放页那次会把方向改回去，导致横竖屏来回跳。
-class FullscreenOrientationScope extends StatefulWidget {
-  const FullscreenOrientationScope({
-    super.key,
-    required this.onChange,
-    required this.child,
-  });
-
-  final ValueChanged<bool> onChange;
-  final Widget child;
-
-  @override
-  State<FullscreenOrientationScope> createState() =>
-      _FullscreenOrientationScopeState();
-}
-
-class _FullscreenOrientationScopeState
-    extends State<FullscreenOrientationScope> {
-  @override
-  void initState() {
-    super.initState();
-    widget.onChange(true);
-  }
-
-  @override
-  void dispose() {
-    widget.onChange(false);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => widget.child;
-}
-
 /// 全屏左上角的返回按钮。
 ///
 /// 优先按 media_kit 的方式退出全屏；拿不到全屏上下文时直接关闭承载全屏的
