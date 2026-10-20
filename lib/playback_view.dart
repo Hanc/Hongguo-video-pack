@@ -154,11 +154,19 @@ class _PlaybackScreenState extends State<PlaybackScreen>
         PlaybackController(
           engine: _native!,
           initialRate: widget.tasks.playbackRate,
-          onProgress: (episode, position) => widget.tasks.saveProgress(
-            widget.summary.id,
-            episode + 1,
-            position,
-          ),
+          onProgress: (episode, position) {
+            widget.tasks.saveProgress(
+              widget.summary.id,
+              episode + 1,
+              position,
+            );
+            // 看过就进追剧列表，下次从首页直接继续。
+            widget.tasks.followDrama(
+              widget.summary.id,
+              widget.summary.title,
+              widget.summary.cover,
+            );
+          },
         );
     if (c.drama == null) {
       // 有上次观看位置就接着看，否则从第一集开始。

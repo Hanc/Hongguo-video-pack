@@ -286,6 +286,10 @@ class _StudioHomeState extends State<StudioHome> {
       discovery.client.indexCache = File(
         p.join(support.path, 'catalogue-v1.json'),
       );
+      // 榜单/分类页面远超内存生命周期，落到应用支持目录，重启后可直接命中。
+      discovery.client.pageCacheDirectory = Directory(
+        p.join(support.path, 'page-cache'),
+      );
       try {
         await discovery.client.loadSearchIdentity(
           File(p.join(support.path, 'search-visitor.json')),
@@ -581,6 +585,7 @@ class _StudioHomeState extends State<StudioHome> {
                                       controller: discovery,
                                       onPick: _pickDrama,
                                       onPlay: _playDrama,
+                                      tasks: c,
                                       selectionDisabled: c.busy || c.loading,
                                     )
                                   else if (page == 2) ...[
@@ -670,7 +675,7 @@ class _StudioHomeState extends State<StudioHome> {
                                     onPressed: () => showAboutDialog(
                                       context: context,
                                       applicationName: '红葡萄',
-                                      applicationVersion: '0.5.1',
+                                      applicationVersion: '0.6.0',
                                       applicationLegalese:
                                           '访客来源 · 本地制作\n包含 GPL-3.0 协议适配与 FFmpeg 组件。源码与第三方声明随交付包提供。',
                                       children: [
@@ -705,7 +710,7 @@ class _StudioHomeState extends State<StudioHome> {
                                       ],
                                     ),
                                     child: const Text(
-                                      '红葡萄 · v0.5.1 · 关于与许可',
+                                      '红葡萄 · v0.6.0 · 关于与许可',
                                       style: TextStyle(
                                         fontSize: 11,
                                         color: muted,

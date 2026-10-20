@@ -45,6 +45,7 @@ Future<void> runPlaybackAcceptance() async {
       );
       // 同一集的第二次取流应命中控制器的短期缓存，这里只验证播放本身。
       stage = 'episode-${i + 1}-open';
+      final openWatch = Stopwatch()..start();
       await engine.open(media);
       stage = 'episode-${i + 1}-first-frame';
       await video.waitUntilFirstFrameRendered.timeout(
@@ -55,6 +56,7 @@ Future<void> runPlaybackAcceptance() async {
             .firstWhere((p) => p.inSeconds >= 2)
             .timeout(const Duration(seconds: 35));
       }
+      openWatch.stop();
       final frame = await engine.player.screenshot(format: 'image/png');
       if (frame == null ||
           frame.isEmpty ||
@@ -69,6 +71,8 @@ Future<void> runPlaybackAcceptance() async {
         'height': engine.player.state.height,
         'seconds': engine.position.inSeconds,
         'frameBytes': frame.length,
+        // 取流地址已就绪的情况下，从 open 到真正有画面用了多久。
+        'openToPictureMs': openWatch.elapsedMilliseconds,
       });
       if (i == 0) {
         stage = 'native-smoke';

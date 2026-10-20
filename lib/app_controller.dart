@@ -89,6 +89,57 @@ class StudioController extends ChangeNotifier {
     if (watchProgress.remove(dramaId) != null) _save();
   }
 
+  /// 追剧列表：按最近观看排序，最多保留 30 部。进度单独存在 [watchProgress]，
+  /// 这里只记身份与封面，避免同一份数据写两遍。
+  static const followedLimit = 30;
+  final followed = <String, FollowedDrama>{};
+
+  void _restoreFollowed(dynamic raw) {
+    followed.clear();
+    if (raw is! List) return;
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final id = '${item['id'] ?? ''}';
+      if (id.isEmpty) continue;
+      followed[id] = FollowedDrama(
+        id: id,
+        title: '${item['title'] ?? ''}',
+        cover: '${item['cover'] ?? ''}',
+        updated: '${item['updated'] ?? ''}',
+      );
+    }
+  }
+
+  /// 最近观看优先。
+  List<FollowedDrama> get followedList {
+    final items = followed.values.toList()
+      ..sort((a, b) => b.updated.compareTo(a.updated));
+    return items;
+  }
+
+  void followDrama(String id, String title, String cover) {
+    if (_disposed || id.isEmpty) return;
+    final existing = followed[id];
+    followed[id] = FollowedDrama(
+      id: id,
+      title: title.isEmpty ? (existing?.title ?? '未命名剧集') : title,
+      cover: cover.isEmpty ? (existing?.cover ?? '') : cover,
+      updated: DateTime.now().toIso8601String(),
+    );
+    if (followed.length > followedLimit) {
+      final ordered = followed.values.toList()
+        ..sort((a, b) => b.updated.compareTo(a.updated));
+      followed
+        ..clear()
+        ..addEntries(ordered.take(followedLimit).map((e) => MapEntry(e.id, e)));
+    }
+    _save();
+  }
+
+  void unfollowDrama(String id) {
+    if (followed.remove(id) != null) _save();
+  }
+
   Future<void> initialize(File store, String defaultOutput) async {
     _store = store;
     outputDirectory = defaultOutput;
@@ -110,6 +161,7 @@ class StudioController extends ChangeNotifier {
           (data['playbackRate'] as num?)?.toDouble() ?? 1,
         );
         _restoreProgress(data['progress']);
+        _restoreFollowed(data['followed']);
         for (final item in data['history'] as List? ?? []) {
           if (item is Map &&
               item['title'] is String &&
@@ -161,6 +213,15 @@ class StudioController extends ChangeNotifier {
             'updated': entry.value.updated,
           },
       },
+      'followed': [
+        for (final item in followed.values)
+          {
+            'id': item.id,
+            'title': item.title,
+            'cover': item.cover,
+            'updated': item.updated,
+          },
+      ],
     });
     _persistTail = _persistTail.then((_) async {
       try {
@@ -516,6 +577,23 @@ class StudioController extends ChangeNotifier {
     client.close();
     super.dispose();
   }
+}
+
+/// 追剧列表里的一部剧。观看进度不重复存这里，由 `watchProgress` 提供。
+class FollowedDrama {
+  const FollowedDrama({
+    required this.id,
+    required this.title,
+    required this.cover,
+    required this.updated,
+  });
+
+  final String id;
+  final String title;
+  final String cover;
+
+  /// ISO8601 时间戳，用于「最近观看优先」排序。
+  final String updated;
 }
 
 /// 一部剧上次看到哪里。

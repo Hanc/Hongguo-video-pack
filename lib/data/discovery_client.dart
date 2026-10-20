@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 import '../domain/discovery.dart';
 import 'hongguo_client.dart' show object, text, integer, Json;
 import 'app_search_client.dart';
@@ -45,10 +48,57 @@ class DiscoveryClient {
 
   /// 来源页面在改版后单页可达 339 KB，服务端首字节 1–27 秒不等。
   /// 重复切回同一个榜单/分类时不应再做一次同样的等待。
-  static const pageCacheTtl = Duration(minutes: 3);
+  static const pageCacheTtl = Duration(minutes: 30);
   static const _pageCacheLimit = 8;
+
+  /// 磁盘页面缓存目录。内存缓存随进程消失，重启后仍要重抓整页，
+  /// 所以把榜单/分类页面落盘，让下次启动直接命中。
+  Directory? pageCacheDirectory;
   final _pageCache = <String, ({String body, DateTime at})>{};
   final _pageInflight = <String, Future<String>>{};
+
+  static String _cacheKey(String key) =>
+      sha1.convert(utf8.encode(key)).toString();
+
+  File? _cacheFile(String key) {
+    final directory = pageCacheDirectory;
+    if (directory == null) return null;
+    return File(p.join(directory.path, '${_cacheKey(key)}.json'));
+  }
+
+  Future<String?> _readDisk(String key) async {
+    final file = _cacheFile(key);
+    if (file == null) return null;
+    try {
+      if (!await file.exists()) return null;
+      final raw = jsonDecode(await file.readAsString());
+      if (raw is! Map) return null;
+      final at = DateTime.tryParse('${raw['at']}');
+      final body = raw['body'];
+      if (at == null || body is! String || body.isEmpty) return null;
+      final age = DateTime.now().difference(at);
+      if (age.isNegative || age >= pageCacheTtl) return null;
+      return body;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _writeDisk(String key, String body) async {
+    final file = _cacheFile(key);
+    if (file == null) return;
+    try {
+      await file.parent.create(recursive: true);
+      final temp = File('${file.path}.tmp');
+      await temp.writeAsString(
+        jsonEncode({'at': DateTime.now().toIso8601String(), 'body': body}),
+        flush: true,
+      );
+      await temp.rename(file.path);
+    } catch (_) {
+      /* 缓存写失败不影响正常取数据。 */
+    }
+  }
 
   Future<String> _get(
     String path, [
@@ -64,13 +114,27 @@ class DiscoveryClient {
     }
     final pending = _pageInflight[key];
     if (pending != null) return pending;
-    final future = _fetch(key, path, query, store: true);
+    final future = _loadCached(key, path, query);
     _pageInflight[key] = future;
     try {
       return await future;
     } finally {
       if (identical(_pageInflight[key], future)) _pageInflight.remove(key);
     }
+  }
+
+  /// 内存 → 磁盘 → 网络，逐级回退。
+  Future<String> _loadCached(
+    String key,
+    String path,
+    Map<String, String>? query,
+  ) async {
+    final disk = await _readDisk(key);
+    if (disk != null) {
+      _pageCache[key] = (body: disk, at: DateTime.now());
+      return disk;
+    }
+    return _fetch(key, path, query, store: true);
   }
 
   Future<String> _fetch(
@@ -95,6 +159,7 @@ class DiscoveryClient {
       _pageCache.remove(_pageCache.keys.first);
     }
     _pageCache[key] = (body: body, at: DateTime.now());
+    unawaited(_writeDisk(key, body));
     return body;
   }
 

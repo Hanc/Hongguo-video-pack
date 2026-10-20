@@ -147,4 +147,33 @@ void main() {
       }
     },
   );
+  test('follow list keeps the most recent first and survives a restart', () async {
+    final dir = await Directory.systemTemp.createTemp('hongguo-follow-');
+    final store = File(p.join(dir.path, 'state.json'));
+    final c = StudioController(client: TestClient(), engine: TestEngine());
+    StudioController? restored;
+    try {
+      await c.initialize(store, p.join(dir.path, 'exports'));
+      c.followDrama('a', '甲剧', 'https://example.com/a.jpg');
+      await Future<void>.delayed(const Duration(milliseconds: 3));
+      c.followDrama('b', '乙剧', 'https://example.com/b.jpg');
+      // 最近追的排在前面。
+      expect(c.followedList.map((e) => e.id).toList(), ['b', 'a']);
+      c.saveProgress('a', 3, const Duration(seconds: 40));
+      await c.flush();
+
+      restored = StudioController(client: TestClient(), engine: TestEngine());
+      await restored.initialize(store, p.join(dir.path, 'exports'));
+      expect(restored.followedList.map((e) => e.id).toList(), ['b', 'a']);
+      expect(restored.followedList.first.title, '乙剧');
+      // 进度与追剧分开存，拼起来就是「第 3 集 · 0:40」。
+      expect(restored.progressFor('a')!.label, '第 3 集 · 0:40');
+      restored.unfollowDrama('b');
+      expect(restored.followedList.map((e) => e.id).toList(), ['a']);
+    } finally {
+      restored?.dispose();
+      c.dispose();
+      await dir.delete(recursive: true);
+    }
+  });
 }

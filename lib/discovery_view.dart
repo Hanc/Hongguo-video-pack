@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'app_controller.dart';
 import 'data/discovery_client.dart';
 import 'discovery_controller.dart';
 import 'domain/discovery.dart';
@@ -13,11 +14,15 @@ class DiscoveryView extends StatefulWidget {
     required this.controller,
     required this.onPick,
     this.onPlay,
+    this.tasks,
     this.selectionDisabled = false,
   });
   final DiscoveryController controller;
   final ValueChanged<DramaSummary> onPick;
   final ValueChanged<DramaSummary>? onPlay;
+
+  /// 追剧列表与观看进度来源；为空时不显示「继续观看」。
+  final StudioController? tasks;
   final bool selectionDisabled;
   @override
   State<DiscoveryView> createState() => _DiscoveryViewState();
@@ -30,6 +35,182 @@ class _DiscoveryViewState extends State<DiscoveryView> {
   void dispose() {
     search.dispose();
     super.dispose();
+  }
+
+  /// 追剧列表：横向卡片，显示上次看到第几集与位置，点一下直接续播。
+  Widget _continueWatching() {
+    final tasks = widget.tasks;
+    if (tasks == null) return const SizedBox.shrink();
+    return ListenableBuilder(
+      listenable: tasks,
+      builder: (context, _) {
+        final items = tasks.followedList;
+        if (items.isEmpty) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.play_circle_outline_rounded,
+                  size: 18,
+                  color: _accent,
+                ),
+                const SizedBox(width: 6),
+                const Text(
+                  '继续观看',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: _ink,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '${items.length} 部',
+                  style: const TextStyle(fontSize: 12, color: _muted),
+                ),
+                const Spacer(),
+                if (items.length > 1)
+                  Text(
+                    '最近观看优先',
+                    style: const TextStyle(fontSize: 11, color: _muted),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 92,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: items.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 10),
+                itemBuilder: (context, i) => _continueCard(tasks, items[i]),
+              ),
+            ),
+            const SizedBox(height: 22),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _continueCard(StudioController tasks, FollowedDrama item) {
+    final progress = tasks.progressFor(item.id);
+    final label = progress == null ? '未开始' : progress.label;
+    return SizedBox(
+      width: 232,
+      child: Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => widget.onPlay?.call(
+            DramaSummary(
+              id: item.id,
+              title: item.title,
+              cover: item.cover,
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: SizedBox(
+                    width: 54,
+                    height: 76,
+                    child: item.cover.isEmpty
+                        ? const ColoredBox(
+                            color: Color(0xFFEDEDF2),
+                            child: Icon(
+                              Icons.movie_outlined,
+                              color: _muted,
+                              size: 20,
+                            ),
+                          )
+                        : Image.network(
+                            item.cover,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => const ColoredBox(
+                              color: Color(0xFFEDEDF2),
+                              child: Icon(
+                                Icons.movie_outlined,
+                                color: _muted,
+                                size: 20,
+                              ),
+                            ),
+                          ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: _ink,
+                          height: 1.25,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        label,
+                        style: const TextStyle(fontSize: 11, color: _muted),
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _accent.withValues(alpha: .1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Text(
+                              '继续播放',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: _accent,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const Spacer(),
+                          InkWell(
+                            onTap: () => tasks.unfollowDrama(item.id),
+                            borderRadius: BorderRadius.circular(8),
+                            child: const Padding(
+                              padding: EdgeInsets.all(3),
+                              child: Icon(
+                                Icons.close_rounded,
+                                size: 14,
+                                color: _muted,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -59,6 +240,7 @@ class _DiscoveryViewState extends State<DiscoveryView> {
         const SizedBox(height: 10),
         const Text('找到喜欢的剧集，加入工作台制作完整合集。', style: TextStyle(color: _muted)),
         const SizedBox(height: 24),
+        _continueWatching(),
         TextField(
           controller: search,
           textInputAction: TextInputAction.search,

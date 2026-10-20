@@ -319,4 +319,48 @@ void main() {
     } catch (_) {}
     expect(calls, 2, reason: '换榜单属于新页面，必须重新请求');
   });
+
+  test('page cache survives a process restart through the disk cache', () async {
+    final dir = await Directory.systemTemp.createTemp('hongguo-pagecache-');
+    var first = 0, second = 0;
+    final client = DiscoveryClient(
+      client: MockClient((req) async {
+        first++;
+        return pageResponse('rank_hot-drama/page', {
+          'pageNum': 1,
+          'content': <String, dynamic>{},
+        });
+      }),
+    );
+    client.pageCacheDirectory = dir;
+    DiscoveryClient? restarted;
+    try {
+      try {
+        await client.ranking('hot-drama');
+      } catch (_) {}
+      expect(first, 1);
+      // 等待异步写盘完成。
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // 新实例代表重启后的进程：内存缓存为空，但磁盘缓存还在。
+      restarted = DiscoveryClient(
+        client: MockClient((req) async {
+          second++;
+          return pageResponse('rank_hot-drama/page', {
+            'pageNum': 1,
+            'content': <String, dynamic>{},
+          });
+        }),
+      );
+      restarted.pageCacheDirectory = dir;
+      try {
+        await restarted.ranking('hot-drama');
+      } catch (_) {}
+      expect(second, 0, reason: '重启后应直接命中磁盘缓存，不再请求来源');
+    } finally {
+      restarted?.close();
+      client.close();
+      await dir.delete(recursive: true);
+    }
+  });
 }
