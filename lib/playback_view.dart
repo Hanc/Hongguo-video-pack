@@ -43,6 +43,7 @@ class _PlaybackScreenState extends State<PlaybackScreen>
       last = TextEditingController(text: '1');
   bool choosing = false, preparing = false;
   bool _showInfo = false;
+  bool _fullscreen = false;
   static const _platform = MethodChannel('dev.hongguo.studio/platform');
 
   /// 倍速属于播放器自身能力，放进控制栏，不占用页面布局。
@@ -59,6 +60,8 @@ class _PlaybackScreenState extends State<PlaybackScreen>
         volumeGesture: !fullscreen,
         brightnessGesture: !fullscreen,
         seekGesture: !fullscreen,
+        // 全屏时左上角提供明确的退出入口，不必再去右下角找切换按钮。
+        topButtonBar: fullscreen ? [_fullscreenBackButton()] : const [],
         bottomButtonBar: [
           const MaterialPositionIndicator(),
           const Spacer(),
@@ -73,6 +76,14 @@ class _PlaybackScreenState extends State<PlaybackScreen>
           const MaterialFullscreenButton(),
         ],
       );
+
+  /// 全屏路由里的返回按钮：调用 media_kit 的退出全屏，和右下角按钮同一条路径。
+  Widget _fullscreenBackButton() => IconButton(
+    tooltip: '退出全屏 (Esc)',
+    color: Colors.white,
+    onPressed: () => unawaited(exitFullscreen(context)),
+    icon: const Icon(Icons.arrow_back_rounded),
+  );
 
   Widget _controls(VideoState state) => Builder(
     builder: (context) {
@@ -132,6 +143,8 @@ class _PlaybackScreenState extends State<PlaybackScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 全局监听：全屏是独立路由，子树里的 Shortcuts 拿不到焦点。
+    HardwareKeyboard.instance.addHandler(_onKeyEvent);
     if (widget.controller == null) {
       _native = NativePlaybackEngine();
       _video = VideoController(_native!.player);
@@ -178,6 +191,7 @@ class _PlaybackScreenState extends State<PlaybackScreen>
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onKeyEvent);
     WidgetsBinding.instance.removeObserver(this);
     _infoTimer?.cancel();
     if (widget.controller == null) c.dispose();
@@ -186,32 +200,77 @@ class _PlaybackScreenState extends State<PlaybackScreen>
     super.dispose();
   }
 
-  /// 播放器内快捷键：只在桌面端注册，不干扰移动端手势。
-  Map<ShortcutActivator, VoidCallback> get _shortcuts => {
-    const SingleActivator(LogicalKeyboardKey.space): () =>
-        unawaited(_togglePlay()),
-    const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
-        unawaited(_seekBy(-const Duration(seconds: 5))),
-    const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
-        unawaited(_seekBy(const Duration(seconds: 5))),
-    const SingleActivator(LogicalKeyboardKey.arrowLeft, shift: true): () =>
-        unawaited(_seekBy(-const Duration(seconds: 15))),
-    const SingleActivator(LogicalKeyboardKey.arrowRight, shift: true): () =>
-        unawaited(_seekBy(const Duration(seconds: 15))),
-    const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
-        unawaited(_changeVolume(.05)),
-    const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
-        unawaited(_changeVolume(-.05)),
-    const SingleActivator(LogicalKeyboardKey.keyF): () =>
-        unawaited(toggleFullscreen(context)),
-    const SingleActivator(LogicalKeyboardKey.keyM): () => unawaited(_mute()),
-    const SingleActivator(LogicalKeyboardKey.keyI): () =>
-        setState(() => _showInfo = !_showInfo),
-    const SingleActivator(LogicalKeyboardKey.comma): () =>
-        unawaited(_frameStep(-1)),
-    const SingleActivator(LogicalKeyboardKey.period): () =>
-        unawaited(_frameStep(1)),
-  };
+  /// 播放器快捷键。全屏是 media_kit push 的独立路由，子树里的
+  /// `CallbackShortcuts` 拿不到焦点，所以这里用全局键盘监听。
+  bool _onKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    if (_editingText()) return false;
+    final key = event.logicalKey;
+    final shift = HardwareKeyboard.instance.isShiftPressed;
+
+    if (key == LogicalKeyboardKey.space) {
+      unawaited(_togglePlay());
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      unawaited(_seekBy(Duration(seconds: shift ? -15 : -5)));
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowRight) {
+      unawaited(_seekBy(Duration(seconds: shift ? 15 : 5)));
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowUp) {
+      unawaited(_changeVolume(.05));
+      return true;
+    }
+    if (key == LogicalKeyboardKey.arrowDown) {
+      unawaited(_changeVolume(-.05));
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyM) {
+      unawaited(_mute());
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyI) {
+      _setInfo(!_showInfo);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.comma) {
+      unawaited(_frameStep(-1));
+      return true;
+    }
+    if (key == LogicalKeyboardKey.period) {
+      unawaited(_frameStep(1));
+      return true;
+    }
+    if (key == LogicalKeyboardKey.escape) {
+      if (!_fullscreen) return false;
+      // 全屏是 push 出来的路由，直接关闭它，避免误退整个播放页。
+      Navigator.of(context, rootNavigator: true).maybePop();
+      return true;
+    }
+    if (key == LogicalKeyboardKey.keyF) {
+      unawaited(toggleFullscreen(context));
+      return true;
+    }
+    return false;
+  }
+
+  /// 在文本输入框里打字时不要抢按键。
+  bool _editingText() {
+    final focusContext = FocusManager.instance.primaryFocus?.context;
+    if (focusContext == null) return false;
+    var editing = false;
+    focusContext.visitAncestorElements((element) {
+      if (element.widget is EditableText) {
+        editing = true;
+        return false;
+      }
+      return true;
+    });
+    return editing;
+  }
 
   Future<void> _togglePlay() async {
     final player = _native?.player;
@@ -308,14 +367,8 @@ class _PlaybackScreenState extends State<PlaybackScreen>
       final pages = ((episodes.length + 49) ~/ 50).clamp(1, 10000);
       final rangePage = episodePage.clamp(0, pages - 1);
       final width = MediaQuery.sizeOf(context).width;
-      return Focus(
-        autofocus: true,
-        child: CallbackShortcuts(
-          bindings: desktop
-              ? _shortcuts
-              : const <ShortcutActivator, VoidCallback>{},
-          child: Scaffold(
-            backgroundColor: const Color(0xFFF6F6F8),
+      return Scaffold(
+        backgroundColor: const Color(0xFFF6F6F8),
             appBar: AppBar(
               backgroundColor: const Color(0xFFF6F6F8),
               title: desktop
@@ -383,6 +436,18 @@ class _PlaybackScreenState extends State<PlaybackScreen>
                                       Video(
                                         controller: _video!,
                                         controls: _controls,
+                                        onEnterFullscreen: () async {
+                                          if (mounted) {
+                                            setState(() => _fullscreen = true);
+                                          }
+                                        },
+                                        onExitFullscreen: () async {
+                                          if (mounted) {
+                                            setState(
+                                              () => _fullscreen = false,
+                                            );
+                                          }
+                                        },
                                       ),
                                     if (_showInfo && _native != null)
                                       PlaybackInfoPanel(
@@ -744,9 +809,7 @@ class _PlaybackScreenState extends State<PlaybackScreen>
                 ],
               ),
             ),
-          ),
-        ),
-      );
+          );
     },
   );
 }

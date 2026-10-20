@@ -670,7 +670,7 @@ class _StudioHomeState extends State<StudioHome> {
                                     onPressed: () => showAboutDialog(
                                       context: context,
                                       applicationName: '红葡萄',
-                                      applicationVersion: '0.5.0',
+                                      applicationVersion: '0.5.1',
                                       applicationLegalese:
                                           '访客来源 · 本地制作\n包含 GPL-3.0 协议适配与 FFmpeg 组件。源码与第三方声明随交付包提供。',
                                       children: [
@@ -705,7 +705,7 @@ class _StudioHomeState extends State<StudioHome> {
                                       ],
                                     ),
                                     child: const Text(
-                                      '红葡萄 · v0.5.0 · 关于与许可',
+                                      '红葡萄 · v0.5.1 · 关于与许可',
                                       style: TextStyle(
                                         fontSize: 11,
                                         color: muted,
