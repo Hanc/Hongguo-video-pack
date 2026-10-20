@@ -98,16 +98,25 @@ class _PlaybackScreenState extends State<PlaybackScreen>
   Widget _controls(VideoState state) => Builder(
     builder: (context) {
       // 全屏是 media_kit push 的独立路由，只有这里能拿到准确的 isFullscreen。
-      _syncFullscreen(isFullscreen(context));
+      final fullscreen = isFullscreen(context);
       final themed = MaterialVideoControlsTheme(
         normal: _controlsTheme(),
         fullscreen: _controlsTheme(fullscreen: true),
         child: MaterialVideoControls(state),
       );
-      if (desktop) return themed;
-      if (!isFullscreen(context) ||
+      // 这个 controls 会被播放页和全屏路由各用一次。只按「本次 build 的
+      // isFullscreen」去改方向，会让播放页那次把屏幕转回竖屏，形成来回跳。
+      // 所以只在全屏控件真正出现/销毁时切换方向。
+      final oriented = fullscreen
+          ? FullscreenOrientationScope(
+              onChange: _syncFullscreen,
+              child: themed,
+            )
+          : themed;
+      if (desktop) return oriented;
+      if (!fullscreen ||
           MediaQuery.orientationOf(context) != Orientation.landscape) {
-        return themed;
+        return oriented;
       }
       final player = _native!.player;
       return PlaybackGestures(
@@ -141,7 +150,7 @@ class _PlaybackScreenState extends State<PlaybackScreen>
               .invokeMethod<void>('resetPlaybackBrightness')
               .catchError((Object _) {}),
         ),
-        child: themed,
+        child: oriented,
       );
     },
   );
@@ -852,6 +861,43 @@ class _PlaybackScreenState extends State<PlaybackScreen>
 }
 
 /// 播放器控制栏里的倍速入口：显示当前倍速，点击选择新档位。
+/// 只在全屏控件真正创建与销毁时回调一次。
+///
+/// 播放页与全屏路由共用同一个 controls 构建函数，若按「本次 build 是否全屏」
+/// 去改屏幕方向，播放页那次会把方向改回去，导致横竖屏来回跳。
+class FullscreenOrientationScope extends StatefulWidget {
+  const FullscreenOrientationScope({
+    super.key,
+    required this.onChange,
+    required this.child,
+  });
+
+  final ValueChanged<bool> onChange;
+  final Widget child;
+
+  @override
+  State<FullscreenOrientationScope> createState() =>
+      _FullscreenOrientationScopeState();
+}
+
+class _FullscreenOrientationScopeState
+    extends State<FullscreenOrientationScope> {
+  @override
+  void initState() {
+    super.initState();
+    widget.onChange(true);
+  }
+
+  @override
+  void dispose() {
+    widget.onChange(false);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 /// 全屏左上角的返回按钮。
 ///
 /// 优先按 media_kit 的方式退出全屏；拿不到全屏上下文时直接关闭承载全屏的

@@ -217,4 +217,30 @@ void main() {
     expect(find.byTooltip('退出全屏'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  // 全屏方向只在真正进出全屏时切换。之前按每次 build 的 isFullscreen 判断，
+  // 播放页那次会把方向改回竖屏，表现为横竖屏来回跳。
+  testWidgets('orientation flips only when the fullscreen scope enters or exits', (
+    tester,
+  ) async {
+    final changes = <bool>[];
+    Widget scope() => MaterialApp(
+      home: FullscreenOrientationScope(
+        onChange: changes.add,
+        child: const Text('全屏'),
+      ),
+    );
+    await tester.pumpWidget(scope());
+    expect(changes, [true], reason: '进入全屏应转横屏');
+
+    // 重建同一个 scope（连播、状态刷新都会触发）不应再次翻转。
+    await tester.pumpWidget(scope());
+    await tester.pumpWidget(scope());
+    expect(changes, [true], reason: '重建不应重复切换方向');
+
+    // 退出全屏时回到竖屏。
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    expect(changes, [true, false]);
+    expect(tester.takeException(), isNull);
+  });
 }
