@@ -68,6 +68,7 @@ supersedes: []
 - `lib/app_controller.dart`：设置恢复、选择、下载编排、缓存、取消与历史。
 - `lib/domain/drama.dart`：剧集、分集和实际画质模型。
 - `lib/data/hongguo_client.dart`、`media_crypto.dart`、`request_signer.dart`：来源详情、取流、媒体解析和签名桥接。
+- `lib/playback_controller.dart`、`lib/services/playback_engine.dart`：播放控制、倍速与连播预加载双通道，契约见 [播放倍速与连播预加载](playback-rate-and-preload.md)。
 - `lib/services/media_engine.dart`：原生 FFmpeg、探测、限线程、同规格拼接、差异修复及校验。
 - `assets/protocol/`、`android/app/src/main/kotlin/dev/hongguo/hongguo_studio/protocol/`：Windows / Android 签名适配。
 - `lib/data/discovery_client.dart`、`lib/discovery_controller.dart`、`lib/discovery_view.dart`：剧库与搜索，契约见 [搜索规格](search-and-source-integration.md)。
@@ -81,6 +82,7 @@ supersedes: []
 - 依据真实来源能力实现账户登录与授权画质，或取得用户明确的范围变更；访客取流不等于登录能力完成。
 - 完成自研 Android 应用的设备级安装、系统文件保存、前台服务、长任务和热管理验收；仅安装官方红果不构成这些项目的验收。
 - 对完整长剧任务验证尺寸差异、取消、失败恢复、输出音画和资源占用；小样本通过不能代表完整 100 集已验证。
+- 在验收设备上验证倍速与双通道连播切换的首帧、音画同步和长时间稳定性；单元与组件测试通过不等于已验收。
 
 ## 禁止方案
 

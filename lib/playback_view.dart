@@ -42,21 +42,39 @@ class _PlaybackScreenState extends State<PlaybackScreen>
   bool choosing = false, preparing = false;
   static const _platform = MethodChannel('dev.hongguo.studio/platform');
 
+  /// 倍速属于播放器自身能力，放进控制栏，不占用页面布局。
+  Widget _speedButton() => AnimatedBuilder(
+    animation: c,
+    builder: (context, _) => PlaybackSpeedButton(
+      rate: c.rate,
+      onChanged: (value) => unawaited(_setRate(value)),
+    ),
+  );
+
+  MaterialVideoControlsThemeData _controlsTheme({bool fullscreen = false}) =>
+      MaterialVideoControlsThemeData(
+        volumeGesture: !fullscreen,
+        brightnessGesture: !fullscreen,
+        seekGesture: !fullscreen,
+        bottomButtonBar: [
+          const MaterialPositionIndicator(),
+          const Spacer(),
+          _speedButton(),
+          const MaterialFullscreenButton(),
+        ],
+      );
+
   Widget _controls(VideoState state) => Builder(
     builder: (context) {
-      if (desktop) return MaterialVideoControls(state);
-      final controls = MaterialVideoControlsTheme(
-        normal: const MaterialVideoControlsThemeData(),
-        fullscreen: const MaterialVideoControlsThemeData(
-          volumeGesture: false,
-          brightnessGesture: false,
-          seekGesture: false,
-        ),
+      final themed = MaterialVideoControlsTheme(
+        normal: _controlsTheme(),
+        fullscreen: _controlsTheme(fullscreen: true),
         child: MaterialVideoControls(state),
       );
+      if (desktop) return themed;
       if (!isFullscreen(context) ||
           MediaQuery.orientationOf(context) != Orientation.landscape) {
-        return controls;
+        return themed;
       }
       final player = _native!.player;
       return PlaybackGestures(
@@ -89,7 +107,7 @@ class _PlaybackScreenState extends State<PlaybackScreen>
               .invokeMethod<void>('resetPlaybackBrightness')
               .catchError((Object _) {}),
         ),
-        child: controls,
+        child: themed,
       );
     },
   );
@@ -107,7 +125,11 @@ class _PlaybackScreenState extends State<PlaybackScreen>
       _native = NativePlaybackEngine();
       _video = VideoController(_native!.player);
     }
-    c = widget.controller ?? PlaybackController(engine: _native!);
+    c = widget.controller ??
+        PlaybackController(
+          engine: _native!,
+          initialRate: widget.tasks.playbackRate,
+        );
     if (c.drama == null) unawaited(c.load(widget.summary.id));
   }
 
@@ -123,6 +145,12 @@ class _PlaybackScreenState extends State<PlaybackScreen>
     first.dispose();
     last.dispose();
     super.dispose();
+  }
+
+  Future<void> _setRate(double value) async {
+    await c.setRate(value);
+    // 倍速记忆在工作台设置里，下次进入播放页继续生效。
+    widget.tasks.setPlaybackRate(c.rate);
   }
 
   Future<void> _stitch() async {
@@ -571,5 +599,43 @@ class _PlaybackScreenState extends State<PlaybackScreen>
         ),
       );
     },
+  );
+}
+
+/// 播放器控制栏里的倍速入口：显示当前倍速，点击选择新档位。
+class PlaybackSpeedButton extends StatelessWidget {
+  const PlaybackSpeedButton({
+    super.key,
+    required this.rate,
+    required this.onChanged,
+  });
+  final double rate;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) => PopupMenuButton<double>(
+    tooltip: '倍速',
+    initialValue: rate,
+    onSelected: onChanged,
+    itemBuilder: (context) => [
+      for (final value in PlaybackController.speeds)
+        PopupMenuItem<double>(
+          value: value,
+          child: Text(PlaybackController.speedLabel(value)),
+        ),
+    ],
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Center(
+        child: Text(
+          PlaybackController.speedLabel(rate),
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    ),
   );
 }

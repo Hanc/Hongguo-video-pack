@@ -10,6 +10,7 @@ class FakePlaybackEngine implements PlaybackEngine {
   final opened = <MediaVariant>[];
   final starts = <Duration>[];
   bool paused = false, disposed = false;
+  double rate = 1;
   Duration currentPosition = Duration.zero;
   @override
   Stream<bool> get completed => end.stream;
@@ -24,6 +25,11 @@ class FakePlaybackEngine implements PlaybackEngine {
   }) async {
     opened.add(media);
     starts.add(start);
+  }
+
+  @override
+  Future<void> setRate(double value) async {
+    rate = value;
   }
 
   @override
@@ -96,9 +102,9 @@ void main() {
     final engine = FakePlaybackEngine(), client = FakePlaybackClient();
     final c = PlaybackController(engine: engine, client: client);
     addTearDown(c.dispose);
-    await c.load('123');
     final slow = Completer<List<MediaVariant>>();
     client.pending['2'] = slow;
+    await c.load('123');
     final old = c.play(1);
     await c.play(2);
     slow.complete([
@@ -133,4 +139,45 @@ void main() {
       expect(c.error, contains('重试'));
     },
   );
+  test(
+    'prefetches only the next episode stream so switching does not refetch',
+    () async {
+      final engine = FakePlaybackEngine(), client = FakePlaybackClient();
+      final c = PlaybackController(engine: engine, client: client);
+      addTearDown(c.dispose);
+      await c.load('123');
+      await Future<void>.delayed(Duration.zero);
+      // 首集播放后只预取第二集取流，不会打开第二条播放通道。
+      expect(engine.opened.single.url, 'https://example.com/1.mp4');
+      expect(client.calls, ['1', '2']);
+      engine.end.add(true);
+      await Future<void>.delayed(Duration.zero);
+      expect(c.index, 1);
+      expect(engine.opened.last.url, 'https://example.com/2.mp4');
+      // 切换用的是预取结果，第二集没有被重复请求。
+      expect(client.calls.where((id) => id == '2').length, 1);
+      await Future<void>.delayed(Duration.zero);
+      expect(client.calls, contains('3'));
+    },
+  );
+  test('playback rate is clamped to a supported speed and reaches the engine', () async {
+    final engine = FakePlaybackEngine();
+    final c = PlaybackController(
+      engine: engine,
+      client: FakePlaybackClient(),
+      initialRate: 1.4,
+    );
+    addTearDown(c.dispose);
+    await c.load('123');
+    expect(c.rate, 1.5);
+    expect(engine.rate, 1.5);
+    await c.setRate(2);
+    expect(c.rate, 2);
+    expect(engine.rate, 2);
+    await c.setRate(1);
+    expect(c.rate, 1);
+    expect(engine.rate, 1);
+    expect(PlaybackController.speedLabel(1), '1.0x');
+    expect(PlaybackController.speedLabel(1.25), '1.25x');
+  });
 }

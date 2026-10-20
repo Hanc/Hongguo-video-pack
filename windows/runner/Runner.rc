@@ -1,4 +1,4 @@
-// Microsoft Visual C++ generated resource script.
+﻿// Microsoft Visual C++ generated resource script.
 //
 #pragma code_page(65001)
 #include "resource.h"
@@ -87,7 +87,7 @@ VS_VERSION_INFO VERSIONINFO
 BEGIN
     BLOCK "StringFileInfo"
     BEGIN
-        BLOCK "040904e4"
+        BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName", "Hongguo Studio" "\0"
             VALUE "FileDescription", "红葡萄" "\0"
@@ -101,7 +101,7 @@ BEGIN
     END
     BLOCK "VarFileInfo"
     BEGIN
-        VALUE "Translation", 0x409, 1252
+        VALUE "Translation", 0x409, 1200
     END
 END
 

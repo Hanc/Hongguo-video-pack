@@ -31,15 +31,39 @@ class NativeRequestSigner implements RequestSigner, SearchRequestSigner {
   static const channel = MethodChannel('dev.hongguo.studio/platform');
   Future<String>? _worker;
   Future<String> _prepare() async {
-    final support = await getApplicationSupportDirectory();
-    final dir = await Directory(
-      p.join(support.path, 'protocol-v1'),
-    ).create(recursive: true);
-    for (final name in ['worker.cjs', 'signer.cjs']) {
-      final data = await rootBundle.loadString('assets/protocol/$name');
-      await File(p.join(dir.path, name)).writeAsString(data, flush: true);
+    // The worker must be written somewhere the current user can actually write.
+    // Application support is preferred; a locked-down or read-only profile must
+    // not turn into "playback cannot start", so fall back to temp dirs.
+    final candidates = <Directory>[];
+    try {
+      candidates.add(await getApplicationSupportDirectory());
+    } catch (_) {
+      /* Platform without app-support directory. */
     }
-    return p.join(dir.path, 'worker.cjs');
+    try {
+      candidates.add(await getTemporaryDirectory());
+    } catch (_) {
+      /* Platform without temp directory. */
+    }
+    candidates.add(Directory.systemTemp);
+    Object? failure;
+    final seen = <String>{};
+    for (final base in candidates) {
+      if (!seen.add(p.normalize(base.path))) continue;
+      try {
+        final dir = await Directory(
+          p.join(base.path, 'protocol-v1'),
+        ).create(recursive: true);
+        for (final name in ['worker.cjs', 'signer.cjs']) {
+          final data = await rootBundle.loadString('assets/protocol/$name');
+          await File(p.join(dir.path, name)).writeAsString(data, flush: true);
+        }
+        return p.join(dir.path, 'worker.cjs');
+      } catch (error) {
+        failure = error;
+      }
+    }
+    throw StateError('签名服务无法写入磁盘，请检查目录权限：$failure');
   }
 
   @override

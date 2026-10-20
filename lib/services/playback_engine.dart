@@ -2,22 +2,31 @@ import 'package:media_kit/media_kit.dart';
 import '../domain/drama.dart';
 import '../playback_controller.dart';
 
+/// 内置 libmpv 播放通道。
+///
+/// 只用一个 [Player]：这是 media_kit 的标准用法，全屏、音轨、字幕等行为与
+/// 官方控件一致。连播的加速由控制器提前取好下一集地址完成，不在播放器层
+/// 预开第二条通道——两个实例会带来全屏暂停、暂停后仍有声音等问题。
 class NativePlaybackEngine implements PlaybackEngine {
   NativePlaybackEngine()
-    : player = Player(
-        configuration: const PlayerConfiguration(
-          title: '红葡萄',
-          bufferSize: 32 * 1024 * 1024,
-        ),
-      );
+      : player = Player(
+          configuration: const PlayerConfiguration(
+            title: '红葡萄',
+            bufferSize: 32 * 1024 * 1024,
+          ),
+        );
+
   final Player player;
   bool _configured = false;
+  double _rate = 1;
+
   @override
   Stream<bool> get completed => player.stream.completed;
   @override
   Stream<String> get errors => player.stream.error;
   @override
   Duration get position => player.state.position;
+
   @override
   Future<void> open(
     MediaVariant media, {
@@ -47,10 +56,18 @@ class NativePlaybackEngine implements PlaybackEngine {
         start: start,
       ),
     );
+    if (_rate != 1) await player.setRate(_rate);
+  }
+
+  @override
+  Future<void> setRate(double rate) async {
+    _rate = rate;
+    await player.setRate(rate);
   }
 
   @override
   Future<void> pause() => player.pause();
+
   @override
   Future<void> dispose() => player.dispose();
 }

@@ -293,4 +293,30 @@ void main() {
     skip: Platform.environment['HONGGUO_DISCOVERY_LIVE'] != '1',
     timeout: const Timeout(Duration(minutes: 5)),
   );
+
+  test('repeated page loads hit the cache; a different board still fetches', () async {
+    var calls = 0;
+    final client = DiscoveryClient(
+      client: MockClient((req) async {
+        calls++;
+        return pageResponse('rank_hot-drama/page', {
+          'pageNum': 1,
+          'content': <String, dynamic>{},
+        });
+      }),
+    );
+    addTearDown(client.close);
+    for (var i = 0; i < 2; i++) {
+      try {
+        await client.ranking('hot-drama');
+      } catch (_) {
+        // 页面结构不完整时解析会抛错，但这次请求本身仍应计入并可被缓存。
+      }
+    }
+    expect(calls, 1, reason: '同一榜单的第二次进入不应再次请求来源页面');
+    try {
+      await client.ranking('hot-real-drama');
+    } catch (_) {}
+    expect(calls, 2, reason: '换榜单属于新页面，必须重新请求');
+  });
 }

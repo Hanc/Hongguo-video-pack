@@ -148,4 +148,37 @@ void main() {
       tasks.dispose();
     });
   }
+
+  // 倍速入口在播放器控制栏内；控制栏只在真实 Video 就绪时渲染，
+  // 因此这里直接验证控制栏按钮组件本身，倍速下发由控制器用例覆盖。
+  testWidgets('player speed button offers every supported rate', (
+    tester,
+  ) async {
+    double? picked;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          backgroundColor: Colors.black,
+          body: Center(
+            child: PlaybackSpeedButton(
+              rate: 1.0,
+              onChanged: (value) => picked = value,
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(find.byTooltip('倍速'), findsOneWidget);
+    expect(find.text('1.0x'), findsOneWidget);
+    await tester.tap(find.byType(PopupMenuButton<double>));
+    await tester.pumpAndSettle();
+    // 菜单里应包含全部受支持档位。
+    for (final value in PlaybackController.speeds) {
+      expect(find.text(PlaybackController.speedLabel(value)), findsWidgets);
+    }
+    await tester.tap(find.text('1.5x').last);
+    await tester.pumpAndSettle();
+    expect(picked, 1.5);
+    expect(tester.takeException(), isNull);
+  });
 }

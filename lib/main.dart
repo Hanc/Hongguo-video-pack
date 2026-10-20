@@ -49,14 +49,17 @@ Future<void> main(List<String> arguments) async {
   if (arguments.contains('--smoke') ||
       arguments.contains('--acceptance') ||
       arguments.contains('--search-acceptance') ||
-      arguments.contains('--playback-acceptance')) {
+      arguments.contains('--playback-acceptance') ||
+      arguments.contains('--switch-acceptance')) {
     runApp(
       const MaterialApp(
         home: Scaffold(body: Center(child: Text('正在验证本地视频引擎…'))),
       ),
     );
     try {
-      if (arguments.contains('--playback-acceptance')) {
+      if (arguments.contains('--switch-acceptance')) {
+        await runSwitchAcceptance();
+      } else if (arguments.contains('--playback-acceptance')) {
         await runPlaybackAcceptance();
       } else if (arguments.contains('--search-acceptance')) {
         await runSearchAcceptance();
@@ -667,7 +670,7 @@ class _StudioHomeState extends State<StudioHome> {
                                     onPressed: () => showAboutDialog(
                                       context: context,
                                       applicationName: '红葡萄',
-                                      applicationVersion: '0.3.0',
+                                      applicationVersion: '0.4.3',
                                       applicationLegalese:
                                           '访客来源 · 本地制作\n包含 GPL-3.0 协议适配与 FFmpeg 组件。源码与第三方声明随交付包提供。',
                                       children: [
@@ -702,7 +705,7 @@ class _StudioHomeState extends State<StudioHome> {
                                       ],
                                     ),
                                     child: const Text(
-                                      '红葡萄 · v0.3.0 · 关于与许可',
+                                      '红葡萄 · v0.4.3 · 关于与许可',
                                       style: TextStyle(
                                         fontSize: 11,
                                         color: muted,

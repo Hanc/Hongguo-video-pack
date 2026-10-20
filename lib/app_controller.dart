@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'data/hongguo_client.dart';
 import 'domain/drama.dart';
+import 'playback_controller.dart';
 import 'services/media_engine.dart';
 import 'data/request_signer.dart';
 
@@ -23,6 +24,7 @@ class StudioController extends ChangeNotifier {
   final history = <Map<String, dynamic>>[];
   bool loading = false, busy = false, normalize = true;
   int quality = 0;
+  double playbackRate = 1;
   double progress = 0;
   String status = '粘贴一部短剧，开始你的第一个合集。';
   String lastInput = 'https://hongguoduanju.com/player/7671966197985856536';
@@ -57,6 +59,9 @@ class StudioController extends ChangeNotifier {
           outputDirectory = data['directory'] as String? ?? defaultOutput;
         }
         normalize = data['normalize'] != false;
+        playbackRate = PlaybackController.nearestSpeed(
+          (data['playbackRate'] as num?)?.toDouble() ?? 1,
+        );
         for (final item in data['history'] as List? ?? []) {
           if (item is Map &&
               item['title'] is String &&
@@ -94,6 +99,7 @@ class StudioController extends ChangeNotifier {
       'lastInput': lastInput,
       'directory': outputDirectory,
       'normalize': normalize,
+      'playbackRate': playbackRate,
       'busy': busy,
       'history': history.take(20).toList(),
       'dramaId': drama?.id,
@@ -265,6 +271,14 @@ class StudioController extends ChangeNotifier {
 
   void setNormalize(bool value) {
     normalize = value;
+    _save();
+    notifyListeners();
+  }
+
+  void setPlaybackRate(double value) {
+    final next = PlaybackController.nearestSpeed(value);
+    if (next == playbackRate) return;
+    playbackRate = next;
     _save();
     notifyListeners();
   }

@@ -47,6 +47,7 @@ class DiscoveryController extends ChangeNotifier {
   Future<void> refresh({bool more = false, int? searchPage}) async {
     final token = ++_request;
     final requestedMode = mode;
+    final requestedBoard = board;
     final requestedCategory = category;
     loading = true;
     error = null;
@@ -112,6 +113,9 @@ class DiscoveryController extends ChangeNotifier {
           items.any((d) => d.metric.isEmpty || needsCoverLookup(d.cover))) {
         unawaited(_enrich(items.toList(), token));
       }
+      if (requestedMode == DiscoveryMode.ranking && !more) {
+        _prefetchBoards(requestedBoard);
+      }
     } catch (e) {
       if (!_disposed && token == _request) {
         error = e is FormatException
@@ -125,6 +129,27 @@ class DiscoveryController extends ChangeNotifier {
         loading = false;
         notifyListeners();
       }
+    }
+  }
+
+  /// 榜单页单次响应可达 339 KB、服务端首字节 1–27 秒。首屏出结果后预热其余
+  /// 榜单，切换榜单时直接命中页面缓存，不再重复等待。
+  bool _prefetchedBoards = false;
+
+  void _prefetchBoards(String current) {
+    if (_prefetchedBoards || _disposed) return;
+    _prefetchedBoards = true;
+    for (final key in DiscoveryClient.boards.keys) {
+      if (key == current) continue;
+      unawaited(_warmBoard(key));
+    }
+  }
+
+  Future<void> _warmBoard(String key) async {
+    try {
+      await client.ranking(key);
+    } catch (_) {
+      /* 预热失败不影响当前视图，用户切过去时再按需请求。 */
     }
   }
 

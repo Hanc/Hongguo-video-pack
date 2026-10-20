@@ -8,13 +8,20 @@ abstract class PlaybackEngine {
   Stream<String> get errors;
   Duration get position;
   Future<void> open(MediaVariant media, {Duration start = Duration.zero});
+
+  /// 播放倍速。
+  Future<void> setRate(double rate);
   Future<void> pause();
   Future<void> dispose();
 }
 
 class PlaybackController extends ChangeNotifier {
-  PlaybackController({required this.engine, HongguoClient? client})
-    : client = client ?? HongguoClient() {
+  PlaybackController({
+    required this.engine,
+    HongguoClient? client,
+    double initialRate = 1,
+  }) : client = client ?? HongguoClient(),
+       rate = nearestSpeed(initialRate) {
     _completed = engine.completed.listen((done) {
       if (done &&
           autoAdvance &&
@@ -39,9 +46,53 @@ class PlaybackController extends ChangeNotifier {
   final selected = <int>{};
   int index = 0, quality = 0;
   bool loading = false, autoAdvance = true, _disposed = false;
+  double rate;
   String? error;
   int _generation = 0;
   Future<void> _openTail = Future.value();
+
+  /// 已取到的取流结果。签名地址有效期很短，所以只复用很短时间。
+  static const prefetchTtl = Duration(minutes: 2);
+  final _variants = <int, ({List<MediaVariant> options, DateTime at})>{};
+  final _inflight = <int, Future<List<MediaVariant>>>{};
+
+  static const speeds = <double>[.5, .75, 1, 1.25, 1.5, 1.75, 2];
+  static double nearestSpeed(double value) => speeds.reduce(
+    (a, b) => (a - value).abs() <= (b - value).abs() ? a : b,
+  );
+  static String speedLabel(double value) =>
+      value == value.roundToDouble() ? '${value.toInt()}.0x' : '${value}x';
+
+  Future<List<MediaVariant>> _variantsFor(
+    int episodeIndex, {
+    bool fresh = false,
+  }) async {
+    final cached = _variants[episodeIndex];
+    if (!fresh &&
+        cached != null &&
+        DateTime.now().difference(cached.at) < prefetchTtl) {
+      return cached.options;
+    }
+    final pending = _inflight[episodeIndex];
+    if (!fresh && pending != null) return pending;
+    late final Future<List<MediaVariant>> future;
+    future = client
+        .fetchVariants(
+          drama!.episodes[episodeIndex],
+          seriesId: drama!.id,
+        )
+        .then((options) {
+          _variants[episodeIndex] = (options: options, at: DateTime.now());
+          return options;
+        })
+        .whenComplete(() {
+          if (identical(_inflight[episodeIndex], future)) {
+            _inflight.remove(episodeIndex);
+          }
+        });
+    _inflight[episodeIndex] = future;
+    return future;
+  }
 
   Future<void> load(String id) async {
     final generation = ++_generation;
@@ -55,6 +106,9 @@ class PlaybackController extends ChangeNotifier {
       drama = value;
       selected.clear();
       selected.add(value.episodes.first.number);
+      _inflight.clear();
+      _variants.clear();
+      if (rate != 1) await engine.setRate(rate);
       await play(0);
     } catch (_) {
       if (_disposed || generation != _generation) return;
@@ -78,22 +132,21 @@ class PlaybackController extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      final options = await client.fetchVariants(
-        value.episodes[episodeIndex],
-        seriesId: value.id,
-      );
+      var options = await _variantsFor(episodeIndex);
       if (_disposed || generation != _generation) return;
-      final media = chooseQuality(options, quality);
-      variants = options;
-      final next = _openTail.then((_) async {
+      try {
+        await _open(options, start, generation);
+      } catch (_) {
+        // 预取到的签名地址可能已过期，重新取流后重试一次。
         if (_disposed || generation != _generation) return;
-        await engine.open(media, start: start);
-      });
-      _openTail = next.catchError((_) {});
-      await next;
+        options = await _variantsFor(episodeIndex, fresh: true);
+        if (_disposed || generation != _generation) return;
+        await _open(options, start, generation);
+      }
       if (_disposed || generation != _generation) return;
       loading = false;
       notifyListeners();
+      _prefetchNext(generation);
     } catch (_) {
       if (_disposed || generation != _generation) return;
       error = '播放准备失败，请重试或切换清晰度。';
@@ -102,10 +155,50 @@ class PlaybackController extends ChangeNotifier {
     }
   }
 
-  Future<void> setQuality(int value) {
+  Future<void> _open(
+    List<MediaVariant> options,
+    Duration start,
+    int generation,
+  ) async {
+    final media = chooseQuality(options, quality);
+    variants = options;
+    final next = _openTail.then((_) async {
+      if (_disposed || generation != _generation) return;
+      await engine.open(media, start: start);
+    });
+    _openTail = next.catchError((_) {});
+    await next;
+  }
+
+  /// 只预取下一集的取流结果（签名 + 地址），不碰播放器。
+  void _prefetchNext(int generation) {
+    final value = drama;
+    if (_disposed || !autoAdvance || value == null) return;
+    final next = index + 1;
+    if (next >= value.episodes.length) return;
+    unawaited(_warm(next, generation));
+  }
+
+  Future<void> _warm(int next, int generation) async {
+    try {
+      await _variantsFor(next);
+    } catch (_) {
+      /* 预取失败只影响过渡速度，切过去时按需重取。 */
+    }
+  }
+
+  Future<void> setQuality(int value) async {
     final position = engine.position;
     quality = value;
-    return play(index, start: position);
+    await play(index, start: position);
+  }
+
+  Future<void> setRate(double value) async {
+    final target = nearestSpeed(value);
+    if (target == rate) return;
+    rate = target;
+    await engine.setRate(target);
+    notifyListeners();
   }
 
   void toggleSelection(int number) {

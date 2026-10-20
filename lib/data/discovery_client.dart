@@ -43,7 +43,42 @@ class DiscoveryClient {
     'ai-drama': 'AI 剧',
   };
 
-  Future<String> _get(String path, [Map<String, String>? query]) async {
+  /// 来源页面在改版后单页可达 339 KB，服务端首字节 1–27 秒不等。
+  /// 重复切回同一个榜单/分类时不应再做一次同样的等待。
+  static const pageCacheTtl = Duration(minutes: 3);
+  static const _pageCacheLimit = 8;
+  final _pageCache = <String, ({String body, DateTime at})>{};
+  final _pageInflight = <String, Future<String>>{};
+
+  Future<String> _get(
+    String path, [
+    Map<String, String>? query,
+    bool useCache = true,
+  ]) async {
+    final key = Uri(path: path, queryParameters: query).toString();
+    if (!useCache) return _fetch(key, path, query, store: false);
+    final cached = _pageCache[key];
+    if (cached != null &&
+        DateTime.now().difference(cached.at) < pageCacheTtl) {
+      return cached.body;
+    }
+    final pending = _pageInflight[key];
+    if (pending != null) return pending;
+    final future = _fetch(key, path, query, store: true);
+    _pageInflight[key] = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_pageInflight[key], future)) _pageInflight.remove(key);
+    }
+  }
+
+  Future<String> _fetch(
+    String key,
+    String path,
+    Map<String, String>? query, {
+    required bool store,
+  }) async {
     final response = await _http
         .get(
           Uri.https('hongguoduanju.com', path, query),
@@ -53,7 +88,14 @@ class DiscoveryClient {
     if (response.statusCode != 200) {
       throw StateError('剧库暂不可用（HTTP ${response.statusCode}），请重试');
     }
-    return utf8.decode(response.bodyBytes);
+    final body = utf8.decode(response.bodyBytes);
+    if (!store) return body;
+    if (_pageCache.length >= _pageCacheLimit) {
+      // 简单的先进先出淘汰，避免长期运行后无限增长。
+      _pageCache.remove(_pageCache.keys.first);
+    }
+    _pageCache[key] = (body: body, at: DateTime.now());
+    return body;
   }
 
   File? indexCache;
@@ -315,7 +357,7 @@ class DiscoveryClient {
 
   Future<Json?> _loadDetails(String id) async {
     try {
-      final html = await _get('/detail', {'series_id': id});
+      final html = await _get('/detail', {'series_id': id}, false);
       final page = routerPage(html, 'detail_page');
       final detail = object(page['seriesDetail']);
       if (text(detail['series_id_str'] ?? detail['series_id']) != id) {
