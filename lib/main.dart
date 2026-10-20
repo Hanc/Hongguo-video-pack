@@ -18,6 +18,7 @@ import 'domain/drama.dart';
 import 'playback_view.dart';
 import 'services/app_storage.dart';
 import 'services/playback_acceptance.dart';
+import 'services/source_health.dart';
 
 const accent = Color(0xFFC20032);
 const ink = Color(0xFF24242D);
@@ -165,6 +166,98 @@ class _StudioHomeState extends State<StudioHome> {
     link.text = 'https://hongguoduanju.com/player/${drama.id}';
     _navigate(1);
     c.load(link.text);
+  }
+
+  /// 逐项探测来源是否可用，并把结果整理成可复制的诊断文本。
+  Future<void> _runSourceCheck() async {
+    SourceHealthReport? report;
+    String? failure;
+    var current = 0;
+    var label = '准备中';
+    var started = false;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setState) {
+          if (!started) {
+            started = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) async {
+              final checker = SourceHealthChecker(version: '0.7.0');
+              try {
+                final result = await checker.run(
+                  onProgress: (done, _, name) {
+                    if (!context.mounted) return;
+                    setState(() {
+                      current = done;
+                      label = name;
+                    });
+                  },
+                );
+                if (context.mounted) setState(() => report = result);
+              } catch (error) {
+                if (context.mounted) {
+                  setState(() => failure = friendlyError(error));
+                }
+              } finally {
+                checker.close();
+              }
+            });
+          }
+          final finished = report != null || failure != null;
+          return AlertDialog(
+            title: const Text('来源自检'),
+            content: SizedBox(
+              width: 520,
+              child: !finished
+                  ? Row(
+                      children: [
+                        const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Text('正在检查 $current/5 · $label'),
+                        ),
+                      ],
+                    )
+                  : report != null
+                  ? SelectableText(
+                      report!.toText(),
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        height: 1.6,
+                      ),
+                    )
+                  : Text(failure!),
+            ),
+            actions: [
+              if (report != null)
+                TextButton.icon(
+                  onPressed: () async {
+                    await Clipboard.setData(
+                      ClipboardData(text: report!.toText()),
+                    );
+                    if (!dialogContext.mounted) return;
+                    ScaffoldMessenger.of(dialogContext).showSnackBar(
+                      const SnackBar(content: Text('诊断报告已复制')),
+                    );
+                  },
+                  icon: const Icon(Icons.copy_rounded, size: 16),
+                  label: const Text('复制报告'),
+                ),
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: Text(finished ? '关闭' : '取消'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   void _playDrama(DramaSummary drama) {
@@ -675,10 +768,14 @@ class _StudioHomeState extends State<StudioHome> {
                                     onPressed: () => showAboutDialog(
                                       context: context,
                                       applicationName: '红葡萄',
-                                      applicationVersion: '0.6.1',
+                                      applicationVersion: '0.7.0',
                                       applicationLegalese:
                                           '访客来源 · 本地制作\n包含 GPL-3.0 协议适配与 FFmpeg 组件。源码与第三方声明随交付包提供。',
                                       children: [
+                                        TextButton(
+                                          onPressed: () => _runSourceCheck(),
+                                          child: const Text('来源自检'),
+                                        ),
                                         TextButton(
                                           onPressed: () async {
                                             final notices = await rootBundle
@@ -710,7 +807,7 @@ class _StudioHomeState extends State<StudioHome> {
                                       ],
                                     ),
                                     child: const Text(
-                                      '红葡萄 · v0.6.1 · 关于与许可',
+                                      '红葡萄 · v0.7.0 · 关于与许可',
                                       style: TextStyle(
                                         fontSize: 11,
                                         color: muted,

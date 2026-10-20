@@ -60,6 +60,17 @@ class _PlaybackScreenState extends State<PlaybackScreen>
         volumeGesture: !fullscreen,
         brightnessGesture: !fullscreen,
         seekGesture: !fullscreen,
+        // 默认进度条只有 2.4 像素厚，几乎看不见。这里加粗、贴到底边，
+        // 并把可点击区域和滑块一起放大，方便拖动。
+        seekBarHeight: 8,
+        seekBarContainerHeight: 30,
+        seekBarThumbSize: 15,
+        seekBarThumbColor: Colors.white,
+        seekBarPositionColor: const Color(0xFFE23A55),
+        seekBarBufferColor: Colors.white38,
+        seekBarColor: Colors.white12,
+        seekBarMargin: EdgeInsets.zero,
+        seekBarAlignment: Alignment.bottomCenter,
         // 全屏时左上角提供明确的退出入口，不必再去右下角找切换按钮。
         topButtonBar: fullscreen ? [_fullscreenBackButton()] : const [],
         bottomButtonBar: [
