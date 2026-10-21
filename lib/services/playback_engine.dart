@@ -28,6 +28,8 @@ class NativePlaybackEngine implements PlaybackEngine {
   Duration get position => player.state.position;
   @override
   Duration get duration => player.state.duration;
+  @override
+  bool get playing => player.state.playing;
 
   @override
   Future<void> open(
@@ -72,6 +74,9 @@ class NativePlaybackEngine implements PlaybackEngine {
     _rate = rate;
     await player.setRate(rate);
   }
+
+  @override
+  Future<void> play() => player.play();
 
   @override
   Future<void> pause() => player.pause();

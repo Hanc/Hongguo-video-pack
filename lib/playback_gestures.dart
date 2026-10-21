@@ -14,6 +14,8 @@ class PlaybackGestures extends StatefulWidget {
     required this.levels,
     required this.setLevel,
     this.onTogglePlay,
+    this.onBoostStart,
+    this.onBoostEnd,
     this.onDispose,
   });
   final Widget child;
@@ -23,6 +25,12 @@ class PlaybackGestures extends StatefulWidget {
   final Future<(double, double)> Function() levels;
   final Future<void> Function(bool brightness, double value) setLevel;
   final VoidCallback? onTogglePlay;
+
+  /// 长按开始：返回要展示的提示文案，null 表示不提示。
+  final String? Function()? onBoostStart;
+
+  /// 长按结束（松手或取消）。
+  final VoidCallback? onBoostEnd;
   final VoidCallback? onDispose;
   @override
   State<PlaybackGestures> createState() => _PlaybackGesturesState();
@@ -42,6 +50,14 @@ class _PlaybackGesturesState extends State<PlaybackGestures> {
   (bool, double)? pending;
   DateTime? _lastTapAt;
   Offset? _lastTapPoint;
+  Timer? _holdTimer;
+  bool _boosted = false;
+
+  /// 长按触发加速的等待时长。
+  static const holdDelay = Duration(milliseconds: 400);
+
+  /// 超过这个位移就不再算长按，交给拖动/点击逻辑。
+  static const holdSlop = 16.0;
 
   /// 双击快进/快退的步长。
   static const doubleTapStep = Duration(seconds: 10);
@@ -144,7 +160,16 @@ class _PlaybackGesturesState extends State<PlaybackGestures> {
       '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
   void finish({bool cancel = false}) {
     if (pointer == null) return;
-    if (!cancel && horizontal == true && widget.duration() > Duration.zero) {
+    _holdTimer?.cancel();
+    _holdTimer = null;
+    final wasBoosted = _boosted;
+    _boosted = false;
+    if (wasBoosted) {
+      // 长按已经加速，松手只负责结束加速，不再当成点击或拖动。
+      widget.onBoostEnd?.call();
+    } else if (!cancel &&
+        horizontal == true &&
+        widget.duration() > Duration.zero) {
       unawaited(
         widget.seek(target).catchError((Object _) {
           if (mounted) setState(() => hint = '跳转失败，请重试');
@@ -160,7 +185,7 @@ class _PlaybackGesturesState extends State<PlaybackGestures> {
     } else if (!cancel &&
         horizontal == null &&
         start != null &&
-        delta.distance < 16) {
+        delta.distance < holdSlop) {
       // 没有位移，视为点击；连续两次即双击。
       _registerTap(start!);
     }
@@ -176,6 +201,7 @@ class _PlaybackGesturesState extends State<PlaybackGestures> {
 
   @override
   void dispose() {
+    _holdTimer?.cancel();
     timer?.cancel();
     pending = null;
     widget.onDispose?.call();
@@ -205,11 +231,24 @@ class _PlaybackGesturesState extends State<PlaybackGestures> {
           origin = widget.position();
           target = origin;
           initial = start!.dx < box.maxWidth / 3 ? brightness : volume;
+          // 按住不动超过 holdDelay 就临时加速；一旦移动就取消。
+          _holdTimer?.cancel();
+          _holdTimer = Timer(holdDelay, () {
+            if (!mounted || pointer != e.pointer || start == null) return;
+            if (delta.distance >= holdSlop) return;
+            _boosted = true;
+            final message = widget.onBoostStart?.call();
+            if (message != null && mounted) _flash(message);
+          });
         },
         onPointerMove: (e) {
           if (pointer != e.pointer || start == null) return;
           delta = e.localPosition - start!;
-          if (horizontal == null && delta.distance < 16) return;
+          if (_holdTimer != null && delta.distance >= holdSlop) {
+            _holdTimer!.cancel();
+            _holdTimer = null;
+          }
+          if (horizontal == null && delta.distance < holdSlop) return;
           horizontal ??= delta.dx.abs() > delta.dy.abs();
           if (horizontal!) {
             final duration = widget.duration();

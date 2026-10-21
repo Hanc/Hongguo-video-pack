@@ -10,6 +10,8 @@ class FakePlaybackEngine implements PlaybackEngine {
   final opened = <MediaVariant>[];
   final starts = <Duration>[];
   bool paused = false, disposed = false;
+  bool isPlaying = true;
+  int playCalls = 0;
   double rate = 1;
   Duration currentPosition = Duration.zero;
   Duration currentDuration = Duration.zero;
@@ -21,6 +23,14 @@ class FakePlaybackEngine implements PlaybackEngine {
   Duration get position => currentPosition;
   @override
   Duration get duration => currentDuration;
+  @override
+  bool get playing => isPlaying;
+  @override
+  Future<void> play() async {
+    playCalls++;
+    isPlaying = true;
+    paused = false;
+  }
   @override
   Future<void> open(
     MediaVariant media, {
@@ -38,6 +48,7 @@ class FakePlaybackEngine implements PlaybackEngine {
   @override
   Future<void> pause() async {
     paused = true;
+    isPlaying = false;
   }
 
   @override
@@ -186,6 +197,65 @@ void main() {
       expect(PlaybackController.speedLabel(1.25), '1.25x');
     },
   );
+
+  test('long press boosts to the top speed then restores the chosen one', () async {
+    final engine = FakePlaybackEngine(), client = FakePlaybackClient();
+    final c = PlaybackController(engine: engine, client: client);
+    addTearDown(c.dispose);
+    await c.load('123');
+    await c.setRate(1.5);
+    expect(c.boosted, isFalse);
+    expect(c.effectiveRate, 1.5);
+
+    expect(c.startBoost(), isTrue);
+    await Future<void>.delayed(Duration.zero);
+    expect(c.boosted, isTrue);
+    expect(c.effectiveRate, PlaybackController.maxSpeed);
+    expect(engine.rate, PlaybackController.maxSpeed);
+
+    // 用户在加速期间改倍速：加速值仍然生效，松手后落到新选择。
+    await c.setRate(1.25);
+    expect(c.effectiveRate, PlaybackController.maxSpeed);
+
+    c.endBoost();
+    await Future<void>.delayed(Duration.zero);
+    expect(c.boosted, isFalse);
+    expect(c.effectiveRate, 1.25);
+    expect(engine.rate, 1.25);
+  });
+
+  test('boost does nothing when already at the top speed', () async {
+    final engine = FakePlaybackEngine(), client = FakePlaybackClient();
+    final c = PlaybackController(engine: engine, client: client);
+    addTearDown(c.dispose);
+    await c.load('123');
+    await c.setRate(PlaybackController.maxSpeed);
+    expect(engine.rate, PlaybackController.maxSpeed);
+
+    expect(c.startBoost(), isFalse, reason: '到最高速就不再加速');
+    await Future<void>.delayed(Duration.zero);
+    expect(c.boosted, isFalse);
+    expect(engine.rate, PlaybackController.maxSpeed);
+  });
+
+  test('boosting while paused starts playback', () async {
+    final engine = FakePlaybackEngine(), client = FakePlaybackClient();
+    final c = PlaybackController(engine: engine, client: client);
+    addTearDown(c.dispose);
+    await c.load('123');
+    engine.isPlaying = false;
+    expect(engine.playCalls, 0);
+
+    expect(c.startBoost(), isTrue);
+    await Future<void>.delayed(Duration.zero);
+    expect(engine.playCalls, 1, reason: '暂停时长按应顺便开始播放');
+    expect(engine.rate, PlaybackController.maxSpeed);
+
+    c.endBoost();
+    await Future<void>.delayed(Duration.zero);
+    // 松手只恢复倍速，不把播放重新暂停。
+    expect(engine.isPlaying, isTrue);
+  });
 
   test('resumes from a remembered episode and position', () async {
     final engine = FakePlaybackEngine(), client = FakePlaybackClient();

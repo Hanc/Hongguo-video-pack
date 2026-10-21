@@ -8,10 +8,12 @@ abstract class PlaybackEngine {
   Stream<String> get errors;
   Duration get position;
   Duration get duration;
+  bool get playing;
   Future<void> open(MediaVariant media, {Duration start = Duration.zero});
 
   /// 播放倍速。
   Future<void> setRate(double rate);
+  Future<void> play();
   Future<void> pause();
   Future<void> dispose();
 }
@@ -234,7 +236,39 @@ class PlaybackController extends ChangeNotifier {
     final target = nearestSpeed(value);
     if (target == rate) return;
     rate = target;
-    await engine.setRate(target);
+    await engine.setRate(effectiveRate);
+    notifyListeners();
+  }
+
+  /// 长按加速用的临时倍速。为 null 表示没有在加速。
+  double? _boostRate;
+  bool get boosted => _boostRate != null;
+
+  /// 实际下发给播放器的倍速：加速时用加速值，否则用用户选择的倍速。
+  double get effectiveRate => _boostRate ?? rate;
+
+  /// 最高档。长按不会超过它。
+  static double get maxSpeed => speeds.last;
+
+  /// 长按开始：临时顶到最高档。
+  ///
+  /// 返回 false 表示当前已经是最高档，不再加速。暂停时会顺便开始播放，
+  /// 这样长按就能一边起播一边快进。
+  bool startBoost() {
+    if (_boostRate != null) return true;
+    if (rate >= maxSpeed) return false;
+    _boostRate = maxSpeed;
+    unawaited(engine.setRate(maxSpeed));
+    if (!engine.playing) unawaited(engine.play());
+    notifyListeners();
+    return true;
+  }
+
+  /// 松手：回到用户选择的倍速。不恢复暂停状态，长按起播后继续播放。
+  void endBoost() {
+    if (_boostRate == null) return;
+    _boostRate = null;
+    unawaited(engine.setRate(rate));
     notifyListeners();
   }
 

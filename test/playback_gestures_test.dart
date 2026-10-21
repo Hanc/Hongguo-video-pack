@@ -126,4 +126,63 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     expect(tester.takeException(), isNull);
   });
+
+  // 长按左右两侧临时加速：按住 400ms 触发，移动则取消，松手结束。
+  testWidgets('long press boosts until release and movement cancels it', (
+    tester,
+  ) async {
+    var boosts = 0, ends = 0;
+    final seeks = <Duration>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: 800,
+              height: 400,
+              child: PlaybackGestures(
+                position: () => const Duration(seconds: 30),
+                duration: () => const Duration(seconds: 60),
+                seek: (value) async => seeks.add(value),
+                changeEpisode: (_) {},
+                levels: () async => (.5, .5),
+                setLevel: (_, _) async {},
+                onBoostStart: () {
+                  boosts++;
+                  return '2.0x 加速中';
+                },
+                onBoostEnd: () => ends++,
+                child: const ColoredBox(color: Colors.black),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // 按住不动超过阈值：触发加速。
+    final hold = await tester.startGesture(const Offset(760, 200));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(boosts, 1);
+    expect(find.text('2.0x 加速中'), findsOneWidget);
+    await hold.up();
+    await tester.pump();
+    expect(ends, 1);
+    // 长按不应同时被当成点击或拖动。
+    expect(seeks, isEmpty);
+
+    // 按住后移动：取消加速，走正常的拖动手势。
+    final drag = await tester.startGesture(const Offset(400, 200));
+    await drag.moveBy(const Offset(60, 0));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(boosts, 1, reason: '移动后不应触发加速');
+    await drag.up();
+    await tester.pump();
+
+    // 清理提示计时器。
+    await tester.pump(const Duration(seconds: 1));
+    expect(tester.takeException(), isNull);
+  });
 }

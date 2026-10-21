@@ -115,6 +115,14 @@ class _PlaybackScreenState extends State<PlaybackScreen>
         duration: () => player.state.duration,
         seek: player.seek,
         onTogglePlay: () => unawaited(_togglePlay()),
+        // 长按左右两侧临时顶到最高倍速，松手回落到用户选择的档位。
+        onBoostStart: () {
+          final applied = c.startBoost();
+          return applied
+              ? '${PlaybackController.speedLabel(c.effectiveRate)} 加速中'
+              : '已是最高倍速';
+        },
+        onBoostEnd: c.endBoost,
         changeEpisode: (step) {
           final next = c.index + step;
           if (!c.loading &&
