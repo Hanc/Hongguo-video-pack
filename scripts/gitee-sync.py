@@ -1,0 +1,142 @@
+"""Mirror public source/releases using GITEE_ACCESS; never log credentials."""
+import base64
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+import uuid
+
+REPOSITORY = os.environ.get('GITEE_REPOSITORY', 'adoin/Hongguo-video-pack')
+TOKEN = os.environ.get('GITEE_ACCESS', '')
+
+
+def request(path, method='GET', body=None, raw=None, content_type=None, authenticated=True):
+    headers = {'User-Agent': 'Hongputao-Release-Mirror', 'Accept': 'application/json'}
+    if authenticated:
+        headers['Authorization'] = 'Bearer ' + TOKEN
+    if body is not None:
+        raw = json.dumps(body).encode()
+        content_type = 'application/json'
+    if content_type:
+        headers['Content-Type'] = content_type
+    url = path if path.startswith('https://') else 'https://gitee.com/api/v5' + path
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, data=raw, headers=headers, method=method), timeout=300) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        if error.code == 404 and method == 'GET':
+            return None
+        raise RuntimeError(f'Gitee API {method} failed: HTTP {error.code}') from None
+
+
+def git_sync():
+    auth = base64.b64encode((REPOSITORY.split('/')[0] + ':' + TOKEN).encode()).decode()
+    env = dict(os.environ, GIT_TRACE='0', GIT_CURL_VERBOSE='0', GIT_TERMINAL_PROMPT='0')
+    command = ['git', '-c', 'credential.helper=', '-c', 'http.https://gitee.com/.extraheader=Authorization: Basic ' + auth,
+               'push', 'https://gitee.com/' + REPOSITORY + '.git', 'refs/remotes/origin/main:refs/heads/main', '--tags']
+    result = subprocess.run(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode:
+        raise RuntimeError('Gitee source sync failed; check token permission or divergent branches (no force push attempted)')
+    print('Source main branch and tags synchronized to Gitee.')
+
+
+def digest(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def packages(directory, version):
+    hashes = {}
+    for line in (directory / 'SHA256SUMS.txt').read_text(encoding='utf-8-sig').splitlines():
+        match = re.fullmatch(r'([a-fA-F0-9]{64})\s+\*?([^/\\]+)', line)
+        if match:
+            hashes[match[2]] = match[1].lower()
+    # Portable ZIP remains on GitHub; keep core mirror attachments below 100 MiB.
+    names = [f'Hongputao-Windows-{version}-Setup.exe', f'Hongputao-Android-arm64-{version}.apk',
+             f'Hongputao-Source-{version}.zip']
+    for name in names:
+        file = directory / name
+        if not file.is_file() or file.stat().st_size >= 100 * 1024 * 1024:
+            raise RuntimeError('Missing package or package exceeds mirror size budget: ' + name)
+        if digest(file) != hashes.get(name):
+            raise RuntimeError('Source package checksum mismatch: ' + name)
+    return names, hashes
+
+
+def verify_public(url, expected):
+    if not url.startswith('https://gitee.com/' + REPOSITORY + '/releases/download/'):
+        raise RuntimeError('Unexpected Gitee attachment URL')
+    calculated = hashlib.sha256()
+    with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'Hongputao-Release-Mirror'}), timeout=300) as response:
+        for chunk in iter(lambda: response.read(1024 * 1024), b''):
+            calculated.update(chunk)
+    if calculated.hexdigest() != expected:
+        raise RuntimeError('Public mirror attachment failed SHA256 verification')
+
+
+def upload(release_id, path):
+    boundary = 'hongputao-' + uuid.uuid4().hex
+    payload = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{path.name}"\r\n'
+               'Content-Type: application/octet-stream\r\n\r\n').encode() + path.read_bytes() + f'\r\n--{boundary}--\r\n'.encode()
+    request(f'/repos/{REPOSITORY}/releases/{release_id}/attach_files', 'POST', raw=payload,
+            content_type='multipart/form-data; boundary=' + boundary)
+
+
+def mirror_release(tag, directory):
+    if not re.fullmatch(r'v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)', tag):
+        raise RuntimeError('Only stable vMAJOR.MINOR.PATCH tags may be mirrored')
+    names, hashes = packages(directory, tag[1:])
+    metadata = json.loads(subprocess.check_output(['gh', 'release', 'view', tag, '--repo', 'adoin/Hongguo-video-pack',
+                                                 '--json', 'isDraft,isPrerelease,body']))
+    if metadata['isDraft'] or metadata['isPrerelease']:
+        raise RuntimeError('Refusing to mirror draft/prerelease')
+    git_sync()
+    endpoint = f'/repos/{REPOSITORY}/releases/tags/{tag}'
+    release = request(endpoint)
+    if release is None:
+        release = request(f'/repos/{REPOSITORY}/releases', 'POST', {
+            'tag_name': tag, 'name': '红葡萄 ' + tag[1:], 'body': metadata['body'] + '\n\nWindows 安装包 / Android APK 与 GitHub 使用相同 SHA256。便携 ZIP 请从 GitHub 下载。',
+            'target_commitish': tag, 'prerelease': True})
+    release_id = release['id']
+    names.append('SHA256SUMS.txt')
+    hashes['SHA256SUMS.txt'] = digest(directory / 'SHA256SUMS.txt')
+    for name in names:
+        release = request(endpoint)
+        asset = next((asset for asset in release.get('assets', []) if asset.get('name') == name), None)
+        if asset is None:
+            if not release['prerelease']:
+                raise RuntimeError('Existing stable mirror is incomplete; refusing to alter published release')
+            upload(release_id, directory / name)
+            release = request(endpoint)
+            asset = next((asset for asset in release.get('assets', []) if asset.get('name') == name), None)
+        if asset is None:
+            raise RuntimeError('Uploaded attachment is absent: ' + name)
+        verify_public(asset['browser_download_url'], hashes[name])
+        print('Public download SHA256 verified: ' + name)
+    request(f'/repos/{REPOSITORY}/releases/{release_id}', 'PATCH', {'prerelease': False})
+    print('Stable Gitee mirror is ready: ' + tag)
+
+
+def main():
+    if not TOKEN or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', REPOSITORY):
+        raise RuntimeError('Configure GITEE_ACCESS secret and GITEE_REPOSITORY variable')
+    if len(sys.argv) == 2 and sys.argv[1] == 'source':
+        git_sync()
+    elif len(sys.argv) == 4 and sys.argv[1] == 'release':
+        mirror_release(sys.argv[2], Path(sys.argv[3]))
+    else:
+        raise RuntimeError('Usage: gitee-sync.py source | release vVERSION DIRECTORY')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as error:
+        # Never print exception URLs, payloads, subprocess arguments or credentials.
+        print('Mirror failed: ' + (str(error) if isinstance(error, RuntimeError) else type(error).__name__), file=sys.stderr)
+        sys.exit(1)

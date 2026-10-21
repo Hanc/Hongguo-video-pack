@@ -1,0 +1,48 @@
+name: Mirror release to Gitee
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable GitHub release tag
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+    secrets:
+      GITEE_ACCESS:
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: gitee-release-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  mirror:
+    if: vars.GITEE_REPOSITORY != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch existing stable release packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
+          gh release download "$RELEASE_TAG" --repo adoin/Hongguo-video-pack --dir mirror-dist \
+            --pattern '*-Setup.exe' --pattern '*.apk' --pattern 'Hongputao-Source-*.zip' --pattern SHA256SUMS.txt
+      - name: Mirror identical packages and verify public downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITEE_ACCESS: ${{ secrets.GITEE_ACCESS }}
+          GITEE_REPOSITORY: ${{ vars.GITEE_REPOSITORY }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python3 scripts/gitee-sync.py release "$RELEASE_TAG" mirror-dist

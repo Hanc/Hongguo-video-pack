@@ -150,3 +150,12 @@ jobs:
           gh release create "v${RELEASE_VERSION}" \
             dist/*.exe dist/*.apk dist/*.zip dist/SHA256SUMS.txt \
             --verify-tag --title "红葡萄 ${RELEASE_VERSION}" --generate-notes
+
+  mirror:
+    needs: [quality, release]
+    if: vars.GITEE_REPOSITORY != ''
+    uses: ./.github/workflows/mirror-gitee.yml
+    with:
+      tag: v${{ needs.quality.outputs.version }}
+    secrets:
+      GITEE_ACCESS: ${{ secrets.GITEE_ACCESS }}

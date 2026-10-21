@@ -1,0 +1,26 @@
+name: Sync source to Gitee
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gitee-source
+  cancel-in-progress: false
+jobs:
+  sync:
+    if: vars.GITEE_REPOSITORY != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Sync main and tags without force pushing
+        env:
+          GITEE_ACCESS: ${{ secrets.GITEE_ACCESS }}
+          GITEE_REPOSITORY: ${{ vars.GITEE_REPOSITORY }}
+        run: python3 scripts/gitee-sync.py source
