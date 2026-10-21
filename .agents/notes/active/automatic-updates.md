@@ -32,3 +32,5 @@ modules: [自动更新, GitHub Release, Gitee 镜像]
 - Ubuntu 26.04 上启用 `RestrictSUIDSGID` 时，Runner 解压 checkout Action 报 `Function not implemented`；用户批准后仅关闭此项，同一任务解压及检出成功。保留 NoNewPrivileges、空 capabilities、ProtectSystem 和专用目录写入限制。
 - Runner 会重建工具 PATH；工作流通过 GITHUB_PATH 加入专用工具目录。Python 优先使用节点现有 python3，不要求全局 python 别名。
 - 正式版同步实际通过后，再将仓库变量 `GITEE_MIRROR_RUNNER` 设为 `publisher`；此前只手动验证已有 v0.3.0，不创建新 Tag。
+- 节点已通过 Action 解压、源码检出和已有安装包下载；2026-10-21 验证仍受 Gitee Release API 响应阻塞，独立 20 秒探测未收到响应。不能据此宣称镜像上传已通过或更新源已就绪。
+- 源码同步仅由 sync-gitee 工作流执行，附件镜像不再重复推 main，避免下载期间 main 已更新造成非快进冲突。
