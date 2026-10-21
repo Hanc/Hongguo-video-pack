@@ -4,6 +4,11 @@ on:
     branches: [main]
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      repair_failed_v031:
+        description: Explicitly approved repair of the unpublished failed v0.3.1 tag
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -23,4 +28,5 @@ jobs:
         env:
           GITEE_ACCESS: ${{ secrets.GITEE_ACCESS }}
           GITEE_REPOSITORY: ${{ vars.GITEE_REPOSITORY }}
+          REPAIR_FAILED_V031: ${{ github.event_name == 'workflow_dispatch' && inputs.repair_failed_v031 }}
         run: python3 scripts/gitee-sync.py source

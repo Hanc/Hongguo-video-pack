@@ -39,6 +39,19 @@ def git_sync():
     # Keep credentials out of process arguments on shared publisher hosts.
     env.update(GIT_CONFIG_COUNT='2', GIT_CONFIG_KEY_0='credential.helper', GIT_CONFIG_VALUE_0='',
                GIT_CONFIG_KEY_1='http.https://gitee.com/.extraheader', GIT_CONFIG_VALUE_1='Authorization: Basic ' + auth)
+    if os.environ.get('REPAIR_FAILED_V031') == 'true':
+        # User-approved repair of one failed, unpublished tag. Never force main
+        # or any other tag; the lease also rejects unexpected concurrent changes.
+        if request(f'/repos/{REPOSITORY}/releases/tags/v0.3.1') is not None:
+            raise RuntimeError('Refusing tag repair because a Gitee release already exists')
+        repair = subprocess.run([
+            'git', 'push',
+            '--force-with-lease=refs/tags/v0.3.1:056d0b34dc802c9972f752004635359634fd3fdc',
+            'https://gitee.com/' + REPOSITORY + '.git',
+            'refs/tags/v0.3.1:refs/tags/v0.3.1'],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if repair.returncode:
+            raise RuntimeError('Scoped v0.3.1 tag repair failed; no broader force push attempted')
     command = ['git', 'push', 'https://gitee.com/' + REPOSITORY + '.git', 'refs/remotes/origin/main:refs/heads/main', '--tags']
     result = subprocess.run(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode:
