@@ -108,7 +108,10 @@ void main() {
           image.dispose();
         });
       }
-      await tester.longPress(find.text('持械入宋：第一季').first);
+      final dramaTitle = find.text('持械入宋：第一季').first;
+      await tester.ensureVisible(dramaTitle);
+      await tester.pumpAndSettle();
+      await tester.longPress(dramaTitle);
       await tester.pumpAndSettle();
       expect(find.text('加入工作台'), findsOneWidget);
       expect(tester.takeException(), isNull);
