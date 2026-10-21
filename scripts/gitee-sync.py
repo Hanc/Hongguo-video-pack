@@ -108,7 +108,9 @@ def mirror_release(tag, directory):
                                                  '--json', 'isDraft,isPrerelease,body']))
     if metadata['isDraft'] or metadata['isPrerelease']:
         raise RuntimeError('Refusing to mirror draft/prerelease')
-    git_sync()
+    # Source/tag pushes have their own workflow. A newer main may already have
+    # reached Gitee while this release job was downloading packages; pushing the
+    # older checkout here would fail non-fast-forward and block attachments.
     endpoint = f'/repos/{REPOSITORY}/releases/tags/{tag}'
     release = request(endpoint)
     if release is None:
