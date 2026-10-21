@@ -11,6 +11,7 @@ class NativePlaybackEngine implements PlaybackEngine {
         ),
       );
   final Player player;
+  static NativePlaybackEngine? _active;
   bool _configured = false;
   @override
   Stream<bool> get completed => player.stream.completed;
@@ -23,6 +24,9 @@ class NativePlaybackEngine implements PlaybackEngine {
     MediaVariant media, {
     Duration start = Duration.zero,
   }) async {
+    final previous = _active;
+    if (previous != null && previous != this) await previous.pause();
+    _active = this;
     final native = player.platform;
     if (native is! NativePlayer) throw StateError('当前平台不支持内置播放');
     if (!_configured) {
@@ -31,7 +35,8 @@ class NativePlaybackEngine implements PlaybackEngine {
       await native.setProperty('demuxer-max-bytes', '${32 * 1024 * 1024}');
       _configured = true;
     }
-    if (media.key != null && !RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(media.key!)) {
+    if (media.key != null &&
+        !RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(media.key!)) {
       throw StateError('媒体授权数据无效');
     }
     // Stop the previous demuxer before changing a per-episode CENC key.
@@ -43,7 +48,9 @@ class NativePlaybackEngine implements PlaybackEngine {
     await player.open(
       Media(
         media.url,
-        httpHeaders: const {'Referer': 'https://novel.snssdk.com/'},
+        httpHeaders: Uri.parse(media.url).scheme == 'file'
+            ? const {}
+            : const {'Referer': 'https://novel.snssdk.com/'},
         start: start,
       ),
     );
@@ -52,5 +59,8 @@ class NativePlaybackEngine implements PlaybackEngine {
   @override
   Future<void> pause() => player.pause();
   @override
-  Future<void> dispose() => player.dispose();
+  Future<void> dispose() {
+    if (_active == this) _active = null;
+    return player.dispose();
+  }
 }

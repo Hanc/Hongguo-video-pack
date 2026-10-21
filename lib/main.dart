@@ -18,6 +18,9 @@ import 'domain/drama.dart';
 import 'playback_view.dart';
 import 'services/app_storage.dart';
 import 'services/playback_acceptance.dart';
+import 'watch_history.dart';
+import 'watch_history_view.dart';
+import 'services/history_acceptance.dart';
 
 const accent = Color(0xFFC20032);
 const ink = Color(0xFF24242D);
@@ -49,14 +52,17 @@ Future<void> main(List<String> arguments) async {
   if (arguments.contains('--smoke') ||
       arguments.contains('--acceptance') ||
       arguments.contains('--search-acceptance') ||
-      arguments.contains('--playback-acceptance')) {
+      arguments.contains('--playback-acceptance') ||
+      arguments.contains('--history-acceptance')) {
     runApp(
       const MaterialApp(
         home: Scaffold(body: Center(child: Text('正在验证本地视频引擎…'))),
       ),
     );
     try {
-      if (arguments.contains('--playback-acceptance')) {
+      if (arguments.contains('--history-acceptance')) {
+        await runHistoryAcceptance();
+      } else if (arguments.contains('--playback-acceptance')) {
         await runPlaybackAcceptance();
       } else if (arguments.contains('--search-acceptance')) {
         await runSearchAcceptance();
@@ -141,7 +147,7 @@ class StudioHome extends StatefulWidget {
   State<StudioHome> createState() => _StudioHomeState();
 }
 
-class _StudioHomeState extends State<StudioHome> {
+class _StudioHomeState extends State<StudioHome> with WidgetsBindingObserver {
   late final StudioController c = widget.controller ?? StudioController();
   final link = TextEditingController(text: demoUrl);
   bool _saving = false;
@@ -164,11 +170,12 @@ class _StudioHomeState extends State<StudioHome> {
     c.load(link.text);
   }
 
-  void _playDrama(DramaSummary drama) {
+  void _playDrama(DramaSummary drama, {WatchPoint? resume}) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => PlaybackScreen(
           summary: drama,
+          resume: resume,
           tasks: c,
           onStitch: _startPlaybackStitch,
           onTasks: _showPlaybackTasks,
@@ -176,6 +183,30 @@ class _StudioHomeState extends State<StudioHome> {
         ),
       ),
     );
+  }
+
+  void _resume(WatchPoint point) {
+    _playDrama(
+      DramaSummary(id: point.dramaId, title: point.title, cover: point.cover),
+      resume: point,
+    );
+  }
+
+  void _showWatchHistory() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            WatchHistoryScreen(history: c.watchHistory, onResume: _resume),
+      ),
+    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(c.watchHistory.pruneMissing());
+    }
+    if (state == AppLifecycleState.paused) unawaited(c.watchHistory.flush());
   }
 
   Future<bool> _startPlaybackStitch(
@@ -271,6 +302,7 @@ class _StudioHomeState extends State<StudioHome> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     if (widget.controller == null) {
       _prepare();
       discovery.refresh();
@@ -309,6 +341,7 @@ class _StudioHomeState extends State<StudioHome> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     link.dispose();
     scroll.dispose();
     if (widget.discoveryController == null) discovery.dispose();
@@ -353,10 +386,24 @@ class _StudioHomeState extends State<StudioHome> {
 
   Future<void> _open(Uri uri) async {
     try {
-      if (Platform.isAndroid && uri.scheme == 'file') {
-        await NativeRequestSigner.channel.invokeMethod('openFile', {
-          'path': uri.toFilePath(),
-        });
+      if (uri.scheme == 'file') {
+        final path = uri.toFilePath();
+        if (!await File(path).exists()) {
+          await c.watchHistory.pruneMissing();
+          throw StateError('文件已不存在');
+        }
+        final point =
+            c.watchHistory.fileFor(path) ??
+            WatchPoint(
+              title:
+                  c.history
+                          .where((e) => e['path'] == path)
+                          .firstOrNull?['title']
+                      as String? ??
+                  p.basenameWithoutExtension(path),
+              path: path,
+            );
+        if (mounted) _resume(point);
         return;
       }
       if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
@@ -573,14 +620,24 @@ class _StudioHomeState extends State<StudioHome> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  if (page == 0)
+                                  if (page == 0) ...[
+                                    RecentHistory(
+                                      history: c.watchHistory,
+                                      onResume: _resume,
+                                      onAll: _showWatchHistory,
+                                    ),
                                     DiscoveryView(
                                       controller: discovery,
                                       onPick: _pickDrama,
                                       onPlay: _playDrama,
                                       selectionDisabled: c.busy || c.loading,
-                                    )
-                                  else if (page == 2) ...[
+                                    ),
+                                  ] else if (page == 2) ...[
+                                    TextButton.icon(
+                                      onPressed: _showWatchHistory,
+                                      icon: const Icon(Icons.history),
+                                      label: const Text('观看记录'),
+                                    ),
                                     const Text(
                                       '任务与导出',
                                       style: TextStyle(
@@ -593,6 +650,14 @@ class _StudioHomeState extends State<StudioHome> {
                                     const SizedBox(height: 24),
                                     _historyCard(),
                                   ] else ...[
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: TextButton.icon(
+                                        onPressed: _showWatchHistory,
+                                        icon: const Icon(Icons.history),
+                                        label: const Text('观看记录'),
+                                      ),
+                                    ),
                                     _heading(wide),
                                     const SizedBox(height: 28),
                                     _linkCard(),
@@ -667,7 +732,7 @@ class _StudioHomeState extends State<StudioHome> {
                                     onPressed: () => showAboutDialog(
                                       context: context,
                                       applicationName: '红葡萄',
-                                      applicationVersion: '0.3.0',
+                                      applicationVersion: '0.4.0',
                                       applicationLegalese:
                                           '访客来源 · 本地制作\n包含 GPL-3.0 协议适配与 FFmpeg 组件。源码与第三方声明随交付包提供。',
                                       children: [
@@ -702,7 +767,7 @@ class _StudioHomeState extends State<StudioHome> {
                                       ],
                                     ),
                                     child: const Text(
-                                      '红葡萄 · v0.3.0 · 关于与许可',
+                                      '红葡萄 · v0.4.0 · 关于与许可',
                                       style: TextStyle(
                                         fontSize: 11,
                                         color: muted,
@@ -1393,11 +1458,14 @@ class _StudioHomeState extends State<StudioHome> {
       children: [
         const SectionTitle(
           '最近导出',
-          subtitle: '最近 20 条记录，原文件保存在导出目录',
+          subtitle: '合成文件保存在本地，使用内置播放器继续观看',
           icon: Icons.history,
         ),
         const SizedBox(height: 12),
-        for (final item in c.history.take(5))
+        for (final item
+            in c.history
+                .where((e) => File(e['path'] as String).existsSync())
+                .take(5))
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.video_file_outlined, color: accent),

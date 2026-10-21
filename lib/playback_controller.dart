@@ -42,8 +42,14 @@ class PlaybackController extends ChangeNotifier {
   String? error;
   int _generation = 0;
   Future<void> _openTail = Future.value();
+  void Function()? onBeforeChange;
 
-  Future<void> load(String id) async {
+  Future<void> load(
+    String id, {
+    int episode = 1,
+    String episodeId = '',
+    Duration start = Duration.zero,
+  }) async {
     final generation = ++_generation;
     loading = true;
     error = null;
@@ -55,7 +61,13 @@ class PlaybackController extends ChangeNotifier {
       drama = value;
       selected.clear();
       selected.add(value.episodes.first.number);
-      await play(0);
+      var restored = value.episodes.indexWhere(
+        (e) => episodeId.isNotEmpty && e.id == episodeId,
+      );
+      if (restored < 0) {
+        restored = value.episodes.indexWhere((e) => e.number == episode);
+      }
+      await play(restored < 0 ? 0 : restored, start: start);
     } catch (_) {
       if (_disposed || generation != _generation) return;
       error = '读取分集失败，请重试。';
@@ -72,6 +84,7 @@ class PlaybackController extends ChangeNotifier {
         episodeIndex >= value.episodes.length) {
       return;
     }
+    onBeforeChange?.call();
     final generation = ++_generation;
     index = episodeIndex;
     loading = true;

@@ -72,6 +72,31 @@ class FakePlaybackClient extends HongguoClient {
 
 void main() {
   test(
+    'resume opens saved episode ID at exact position, checkpoint precedes switching',
+    () async {
+      final engine = FakePlaybackEngine();
+      final c = PlaybackController(
+        engine: engine,
+        client: FakePlaybackClient(),
+      );
+      addTearDown(c.dispose);
+      await c.load(
+        '123',
+        episode: 1,
+        episodeId: '18',
+        start: const Duration(milliseconds: 45678),
+      );
+      expect(c.index, 17);
+      expect(engine.starts.single.inMilliseconds, 45678);
+      var checkpointIndex = -1;
+      c.onBeforeChange = () {
+        checkpointIndex = c.index;
+      };
+      await c.play(18);
+      expect(checkpointIndex, 17);
+    },
+  );
+  test(
     'plays full-list episode, retains seek on quality switch, separates stitch selection',
     () async {
       final engine = FakePlaybackEngine(), client = FakePlaybackClient();

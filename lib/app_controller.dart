@@ -8,11 +8,15 @@ import 'data/hongguo_client.dart';
 import 'domain/drama.dart';
 import 'services/media_engine.dart';
 import 'data/request_signer.dart';
+import 'watch_history.dart';
 
 class StudioController extends ChangeNotifier {
   StudioController({HongguoClient? client, MediaEngine? engine})
     : client = client ?? HongguoClient(),
-      engine = engine ?? MediaEngine();
+      engine = engine ?? MediaEngine() {
+    watchHistory.addListener(notifyListeners);
+  }
+  final watchHistory = WatchHistory();
   final HongguoClient client;
   final MediaEngine engine;
   Drama? drama;
@@ -68,7 +72,9 @@ class StudioController extends ChangeNotifier {
             entry['date'] = DateTime.parse(
               item['date'] as String,
             ).toIso8601String();
-            history.add(entry);
+            if (await File(entry['path'] as String).exists()) {
+              history.add(entry);
+            }
           }
         }
         if (data['busy'] == true) status = '上次任务已中断；重新读取后可继续，已下载分集会自动复用。';
@@ -77,6 +83,20 @@ class StudioController extends ChangeNotifier {
       status = '已恢复默认设置，现有导出文件不受影响。';
     }
     await Directory(outputDirectory).create(recursive: true);
+    await watchHistory.initialize(
+      File(p.join(store.parent.path, 'data', 'watch-history.json')),
+    );
+    for (final entry in history.reversed) {
+      watchHistory.record(
+        WatchPoint(
+          title: entry['title'] as String,
+          path: entry['path'] as String,
+        ),
+        importing: true,
+        date: DateTime.tryParse(entry['date'] as String),
+      );
+    }
+    await watchHistory.flush();
     notifyListeners();
   }
 
@@ -88,14 +108,15 @@ class StudioController extends ChangeNotifier {
 
   Future<void> flush() {
     _saveTimer?.cancel();
+    final historySaved = watchHistory.flush();
     final store = _store;
-    if (store == null) return Future.value();
+    if (store == null) return historySaved;
     final payload = jsonEncode({
       'lastInput': lastInput,
       'directory': outputDirectory,
       'normalize': normalize,
       'busy': busy,
-      'history': history.take(20).toList(),
+      'history': history,
       'dramaId': drama?.id,
       'selected': selected.toList()..sort(),
       'quality': quality,
@@ -110,7 +131,7 @@ class StudioController extends ChangeNotifier {
         /* Media export remains valid even if preferences cannot be saved. */
       }
     });
-    return _persistTail;
+    return Future.wait([_persistTail, historySaved]).then((_) {});
   }
 
   Future<void> clearCache() async {
@@ -415,7 +436,7 @@ class StudioController extends ChangeNotifier {
         'date': DateTime.now().toIso8601String(),
         'count': inputs.length,
       });
-      if (history.length > 20) history.removeLast();
+      watchHistory.record(WatchPoint(title: rawTitle, path: destination));
       log('导出完成 · ${p.basename(destination)}');
     } on JobCancelled {
       log('任务已取消，已下载分集保留，下次可直接继续');
@@ -443,6 +464,8 @@ class StudioController extends ChangeNotifier {
   void dispose() {
     _saveTimer?.cancel();
     _disposed = true;
+    watchHistory.removeListener(notifyListeners);
+    watchHistory.dispose();
     client.close();
     super.dispose();
   }

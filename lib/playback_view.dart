@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -9,6 +10,7 @@ import 'domain/drama.dart';
 import 'playback_controller.dart';
 import 'playback_gestures.dart';
 import 'services/playback_engine.dart';
+import 'watch_history.dart';
 
 class PlaybackScreen extends StatefulWidget {
   const PlaybackScreen({
@@ -20,6 +22,8 @@ class PlaybackScreen extends StatefulWidget {
     this.onCloseWindow,
     this.controller,
     this.videoBuilder,
+    this.resume,
+    this.nativeEngine,
   });
   final DramaSummary summary;
   final StudioController tasks;
@@ -28,6 +32,8 @@ class PlaybackScreen extends StatefulWidget {
   final Future<void> Function()? onCloseWindow;
   final PlaybackController? controller;
   final Widget Function()? videoBuilder;
+  final WatchPoint? resume;
+  final NativePlaybackEngine? nativeEngine;
   @override
   State<PlaybackScreen> createState() => _PlaybackScreenState();
 }
@@ -40,6 +46,86 @@ class _PlaybackScreenState extends State<PlaybackScreen>
   final first = TextEditingController(text: '1'),
       last = TextEditingController(text: '1');
   bool choosing = false, preparing = false;
+  Timer? _historyTimer;
+  StreamSubscription<bool>? _playingSubscription;
+  String? _checkpoint;
+  bool _localLoading = false;
+  String? _localError;
+  bool get _local => widget.resume?.local == true;
+
+  void _saveProgress() {
+    final native = _native;
+    if (native == null ||
+        c.loading ||
+        c.error != null ||
+        _localLoading ||
+        _localError != null) {
+      return;
+    }
+    final position = native.player.state.position.inMilliseconds;
+    final duration = native.player.state.duration.inMilliseconds;
+    if (duration <= 0 || position <= 0) return;
+    if (_local && !File(widget.resume!.path).existsSync()) {
+      unawaited(widget.tasks.watchHistory.pruneMissing());
+      return;
+    }
+    final checkpoint = '${c.index}:$position:$duration';
+    if (_checkpoint == checkpoint) return;
+    _checkpoint = checkpoint;
+    WatchPoint point;
+    if (_local) {
+      point =
+          widget.tasks.watchHistory.fileFor(widget.resume!.path) ??
+          widget.resume!.copy();
+    } else {
+      final drama = c.drama;
+      if (drama == null || drama.episodes.isEmpty) return;
+      point = WatchPoint(
+        title: drama.title,
+        dramaId: drama.id,
+        cover: drama.cover.isEmpty ? widget.summary.cover : drama.cover,
+        episodeId: drama.episodes[c.index].id,
+        episode: drama.episodes[c.index].number,
+        total: drama.episodes.length,
+      );
+      final previous = widget.tasks.watchHistory.onlineFor(drama.id);
+      point.watched = previous?.watched ?? false;
+    }
+    point.updateProgress(
+      position,
+      duration,
+      finalEpisode: _local || c.index == c.drama!.episodes.length - 1,
+    );
+    widget.tasks.watchHistory.record(point);
+  }
+
+  Future<void> _openLocal() async {
+    setState(() {
+      _localLoading = true;
+      _localError = null;
+      c.error = null;
+    });
+    try {
+      final point = widget.resume!;
+      if (!await File(point.path).exists()) {
+        await widget.tasks.watchHistory.pruneMissing();
+        throw StateError('missing');
+      }
+      await _native!.open(
+        MediaVariant(
+          url: Uri.file(point.path).toString(),
+          quality: 0,
+          codec: 'local',
+        ),
+        start: Duration(milliseconds: point.positionMs),
+      );
+    } catch (_) {
+      if (mounted) _localError = '无法播放本地视频，请确认文件仍存在且可以读取。';
+    } finally {
+      if (mounted) setState(() => _localLoading = false);
+    }
+  }
+
   static const _platform = MethodChannel('dev.hongguo.studio/platform');
 
   Widget _controls(VideoState state) => Builder(
@@ -104,21 +190,54 @@ class _PlaybackScreenState extends State<PlaybackScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     if (widget.controller == null) {
-      _native = NativePlaybackEngine();
+      _native = widget.nativeEngine ?? NativePlaybackEngine();
       _video = VideoController(_native!.player);
     }
     c = widget.controller ?? PlaybackController(engine: _native!);
-    if (c.drama == null) unawaited(c.load(widget.summary.id));
+    c.onBeforeChange = _saveProgress;
+    if (_local) {
+      unawaited(_openLocal());
+    } else if (c.drama == null) {
+      final point =
+          widget.resume ??
+          widget.tasks.watchHistory.onlineFor(widget.summary.id);
+      episodePage = ((point?.episode ?? 1) - 1) ~/ 50;
+      unawaited(
+        c.load(
+          widget.summary.id,
+          episode: point?.episode ?? 1,
+          episodeId: point?.episodeId ?? '',
+          start: Duration(milliseconds: point?.positionMs ?? 0),
+        ),
+      );
+    }
+    if (_native != null) {
+      _historyTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+        if (_native!.player.state.playing) _saveProgress();
+      });
+      _playingSubscription = _native!.player.stream.playing.listen((playing) {
+        if (!playing) _saveProgress();
+      });
+    }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      _saveProgress();
+      unawaited(widget.tasks.watchHistory.flush());
+    }
     if (state == AppLifecycleState.paused) unawaited(c.engine.pause());
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _historyTimer?.cancel();
+    unawaited(_playingSubscription?.cancel());
+    _saveProgress();
+    c.onBeforeChange = null;
     if (widget.controller == null) c.dispose();
     first.dispose();
     last.dispose();
@@ -197,7 +316,11 @@ class _PlaybackScreenState extends State<PlaybackScreen>
                 brightness: Brightness.light,
               ),
               WindowCaptionButton.close(
-                onPressed: widget.onCloseWindow,
+                onPressed: () async {
+                  _saveProgress();
+                  await widget.tasks.watchHistory.flush();
+                  await widget.onCloseWindow?.call();
+                },
                 brightness: Brightness.light,
               ),
             ],
@@ -229,13 +352,13 @@ class _PlaybackScreenState extends State<PlaybackScreen>
                                     controller: _video!,
                                     controls: _controls,
                                   ),
-                                if (c.loading)
+                                if (c.loading || _localLoading)
                                   const IgnorePointer(
                                     child: Center(
                                       child: CircularProgressIndicator(),
                                     ),
                                   ),
-                                if (c.error != null)
+                                if (c.error != null || _localError != null)
                                   Center(
                                     child: Container(
                                       margin: const EdgeInsets.all(16),
@@ -248,7 +371,7 @@ class _PlaybackScreenState extends State<PlaybackScreen>
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           Text(
-                                            c.error!,
+                                            _localError ?? c.error!,
                                             textAlign: TextAlign.center,
                                             style: const TextStyle(
                                               color: Colors.white,
@@ -256,7 +379,9 @@ class _PlaybackScreenState extends State<PlaybackScreen>
                                           ),
                                           const SizedBox(height: 12),
                                           FilledButton(
-                                            onPressed: () => c.drama == null
+                                            onPressed: () => _local
+                                                ? _openLocal()
+                                                : c.drama == null
                                                 ? c.load(widget.summary.id)
                                                 : c.play(c.index),
                                             child: const Text('重试播放'),
@@ -271,297 +396,314 @@ class _PlaybackScreenState extends State<PlaybackScreen>
                         ),
                       ),
                       const SizedBox(height: 16),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 10,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          Text(
-                            episodes.isEmpty
-                                ? '正在读取完整分集…'
-                                : '第 ${episodes[c.index].number} 集 / 共 ${episodes.length} 集',
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
+                      if (_local) ...[
+                        const Text(
+                          '本地合成视频 · 自动保存观看位置',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(widget.resume!.title),
+                      ] else ...[
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 10,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Text(
+                              episodes.isEmpty
+                                  ? '正在读取完整分集…'
+                                  : '第 ${episodes[c.index].number} 集 / 共 ${episodes.length} 集',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                          ),
-                          IconButton(
-                            tooltip: '上一集',
-                            onPressed: c.loading || c.index <= 0
-                                ? null
-                                : () => c.play(c.index - 1),
-                            icon: const Icon(Icons.skip_previous_rounded),
-                          ),
-                          IconButton(
-                            tooltip: '下一集',
-                            onPressed:
-                                c.loading || c.index + 1 >= episodes.length
-                                ? null
-                                : () => c.play(c.index + 1),
-                            icon: const Icon(Icons.skip_next_rounded),
-                          ),
-                          if (c.variants.isNotEmpty)
-                            DropdownButton<int>(
-                              value:
-                                  c.variants.any((v) => v.quality == c.quality)
-                                  ? c.quality
-                                  : 0,
-                              items: [
-                                const DropdownMenuItem(
-                                  value: 0,
-                                  child: Text('自动画质'),
-                                ),
-                                ...c.variants.map(
-                                  (v) => DropdownMenuItem(
-                                    value: v.quality,
-                                    child: Text(v.label),
+                            IconButton(
+                              tooltip: '上一集',
+                              onPressed: c.loading || c.index <= 0
+                                  ? null
+                                  : () => c.play(c.index - 1),
+                              icon: const Icon(Icons.skip_previous_rounded),
+                            ),
+                            IconButton(
+                              tooltip: '下一集',
+                              onPressed:
+                                  c.loading || c.index + 1 >= episodes.length
+                                  ? null
+                                  : () => c.play(c.index + 1),
+                              icon: const Icon(Icons.skip_next_rounded),
+                            ),
+                            if (c.variants.isNotEmpty)
+                              DropdownButton<int>(
+                                value:
+                                    c.variants.any(
+                                      (v) => v.quality == c.quality,
+                                    )
+                                    ? c.quality
+                                    : 0,
+                                items: [
+                                  const DropdownMenuItem(
+                                    value: 0,
+                                    child: Text('自动画质'),
                                   ),
+                                  ...c.variants.map(
+                                    (v) => DropdownMenuItem(
+                                      value: v.quality,
+                                      child: Text(v.label),
+                                    ),
+                                  ),
+                                ],
+                                onChanged: c.loading
+                                    ? null
+                                    : (v) {
+                                        if (v != null) c.setQuality(v);
+                                      },
+                              ),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Text('自动连播'),
+                                Switch(
+                                  value: c.autoAdvance,
+                                  onChanged: c.setAutoAdvance,
                                 ),
                               ],
-                              onChanged: c.loading
-                                  ? null
-                                  : (v) {
-                                      if (v != null) c.setQuality(v);
-                                    },
-                            ),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Text('自动连播'),
-                              Switch(
-                                value: c.autoAdvance,
-                                onChanged: c.setAutoAdvance,
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 18),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 10,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          SegmentedButton<bool>(
-                            style: const ButtonStyle(
-                              side: WidgetStatePropertyAll(BorderSide.none),
-                            ),
-                            segments: const [
-                              ButtonSegment(
-                                value: false,
-                                label: Text('播放选集'),
-                                icon: Icon(Icons.play_arrow_rounded),
-                              ),
-                              ButtonSegment(
-                                value: true,
-                                label: Text('选择拼接'),
-                                icon: Icon(Icons.video_library_outlined),
-                              ),
-                            ],
-                            selected: {choosing},
-                            onSelectionChanged: (value) =>
-                                setState(() => choosing = value.first),
-                          ),
-                          FilledButton.icon(
-                            onPressed:
-                                preparing ||
-                                    widget.tasks.busy ||
-                                    widget.tasks.loading ||
-                                    c.selected.isEmpty
-                                ? null
-                                : _stitch,
-                            icon: const Icon(Icons.merge_rounded),
-                            label: Text(
-                              preparing
-                                  ? '准备任务…'
-                                  : '拼接所选 ${c.selected.length} 集',
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (widget.tasks.busy)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 14),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              LinearProgressIndicator(
-                                value: widget.tasks.progress,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(widget.tasks.status),
-                            ],
-                          ),
-                        ),
-                      if (choosing)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          child: Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            children: [
-                              TextButton(
-                                onPressed: () {
-                                  c.selectAll(false);
-                                  if (episodes.isNotEmpty) {
-                                    c.toggleSelection(episodes[c.index].number);
-                                  }
-                                },
-                                child: const Text('只选当前集'),
-                              ),
-                              TextButton(
-                                onPressed: () => c.selectAll(true),
-                                child: const Text('全选'),
-                              ),
-                              TextButton(
-                                onPressed: () => c.selectAll(false),
-                                child: const Text('清空'),
-                              ),
-                              SizedBox(
-                                width: 72,
-                                child: TextField(
-                                  controller: first,
-                                  keyboardType: TextInputType.number,
-                                  decoration: const InputDecoration(
-                                    labelText: '起始',
-                                  ),
-                                ),
-                              ),
-                              SizedBox(
-                                width: 72,
-                                child: TextField(
-                                  controller: last,
-                                  keyboardType: TextInputType.number,
-                                  decoration: const InputDecoration(
-                                    labelText: '结束',
-                                  ),
-                                ),
-                              ),
-                              TextButton(
-                                onPressed: () {
-                                  final a = int.tryParse(first.text),
-                                      b = int.tryParse(last.text);
-                                  if (a == null ||
-                                      b == null ||
-                                      a < 1 ||
-                                      b < a ||
-                                      episodes.isEmpty ||
-                                      b > episodes.last.number) {
-                                    return;
-                                  }
-                                  c.selectRange(a, b);
-                                },
-                                child: const Text('选择范围'),
-                              ),
-                            ],
-                          ),
-                        ),
-                      const SizedBox(height: 12),
-                      LayoutBuilder(
-                        builder: (context, constraints) {
-                          final scale =
-                              MediaQuery.textScalerOf(context).scale(13) / 13;
-                          final columns = (constraints.maxWidth / (80 * scale))
-                              .floor()
-                              .clamp(1, 10);
-                          final start = rangePage * 50;
-                          final count = (episodes.length - start).clamp(0, 50);
-                          return GridView.builder(
-                            shrinkWrap: true,
-                            padding: EdgeInsets.zero,
-                            physics: const NeverScrollableScrollPhysics(),
-                            gridDelegate:
-                                SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: columns,
-                                  crossAxisSpacing: 8,
-                                  mainAxisSpacing: 8,
-                                  mainAxisExtent: 48 * scale,
-                                ),
-                            itemCount: count,
-                            itemBuilder: (context, offset) {
-                              final i = start + offset;
-                              final number = episodes[i].number;
-                              final selected = choosing
-                                  ? c.selected.contains(number)
-                                  : i == c.index;
-                              final colors = Theme.of(context).colorScheme;
-                              return Semantics(
-                                selected: selected,
-                                child: TextButton(
-                                  key: ValueKey('episode-$number'),
-                                  style: TextButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                    ),
-                                    backgroundColor: selected
-                                        ? colors.secondaryContainer
-                                        : Colors.white,
-                                    foregroundColor: selected
-                                        ? colors.onSecondaryContainer
-                                        : const Color(0xFF24242D),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                  ),
-                                  onPressed: () => choosing
-                                      ? c.toggleSelection(number)
-                                      : c.play(i),
-                                  child: Stack(
-                                    fit: StackFit.expand,
-                                    children: [
-                                      Center(
-                                        child: FittedBox(
-                                          fit: BoxFit.scaleDown,
-                                          child: Text(
-                                            '第 $number 集',
-                                            style: const TextStyle(
-                                              fontSize: 13,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      if (selected)
-                                        const Positioned(
-                                          right: 0,
-                                          top: 2,
-                                          child: Icon(
-                                            Icons.check_rounded,
-                                            size: 12,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                          );
-                        },
-                      ),
-                      if (pages > 1)
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            TextButton(
-                              onPressed: rangePage == 0
-                                  ? null
-                                  : () => setState(
-                                      () => episodePage = rangePage - 1,
-                                    ),
-                              child: const Text('前 50 集'),
-                            ),
-                            Text('${rangePage + 1} / $pages'),
-                            TextButton(
-                              onPressed: rangePage + 1 == pages
-                                  ? null
-                                  : () => setState(
-                                      () => episodePage = rangePage + 1,
-                                    ),
-                              child: const Text('后 50 集'),
                             ),
                           ],
                         ),
-                      const SizedBox(height: 20),
+                        const SizedBox(height: 18),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 10,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            SegmentedButton<bool>(
+                              style: const ButtonStyle(
+                                side: WidgetStatePropertyAll(BorderSide.none),
+                              ),
+                              segments: const [
+                                ButtonSegment(
+                                  value: false,
+                                  label: Text('播放选集'),
+                                  icon: Icon(Icons.play_arrow_rounded),
+                                ),
+                                ButtonSegment(
+                                  value: true,
+                                  label: Text('选择拼接'),
+                                  icon: Icon(Icons.video_library_outlined),
+                                ),
+                              ],
+                              selected: {choosing},
+                              onSelectionChanged: (value) =>
+                                  setState(() => choosing = value.first),
+                            ),
+                            FilledButton.icon(
+                              onPressed:
+                                  preparing ||
+                                      widget.tasks.busy ||
+                                      widget.tasks.loading ||
+                                      c.selected.isEmpty
+                                  ? null
+                                  : _stitch,
+                              icon: const Icon(Icons.merge_rounded),
+                              label: Text(
+                                preparing
+                                    ? '准备任务…'
+                                    : '拼接所选 ${c.selected.length} 集',
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (widget.tasks.busy)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 14),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                LinearProgressIndicator(
+                                  value: widget.tasks.progress,
+                                ),
+                                const SizedBox(height: 8),
+                                Text(widget.tasks.status),
+                              ],
+                            ),
+                          ),
+                        if (choosing)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                TextButton(
+                                  onPressed: () {
+                                    c.selectAll(false);
+                                    if (episodes.isNotEmpty) {
+                                      c.toggleSelection(
+                                        episodes[c.index].number,
+                                      );
+                                    }
+                                  },
+                                  child: const Text('只选当前集'),
+                                ),
+                                TextButton(
+                                  onPressed: () => c.selectAll(true),
+                                  child: const Text('全选'),
+                                ),
+                                TextButton(
+                                  onPressed: () => c.selectAll(false),
+                                  child: const Text('清空'),
+                                ),
+                                SizedBox(
+                                  width: 72,
+                                  child: TextField(
+                                    controller: first,
+                                    keyboardType: TextInputType.number,
+                                    decoration: const InputDecoration(
+                                      labelText: '起始',
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 72,
+                                  child: TextField(
+                                    controller: last,
+                                    keyboardType: TextInputType.number,
+                                    decoration: const InputDecoration(
+                                      labelText: '结束',
+                                    ),
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: () {
+                                    final a = int.tryParse(first.text),
+                                        b = int.tryParse(last.text);
+                                    if (a == null ||
+                                        b == null ||
+                                        a < 1 ||
+                                        b < a ||
+                                        episodes.isEmpty ||
+                                        b > episodes.last.number) {
+                                      return;
+                                    }
+                                    c.selectRange(a, b);
+                                  },
+                                  child: const Text('选择范围'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        const SizedBox(height: 12),
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final scale =
+                                MediaQuery.textScalerOf(context).scale(13) / 13;
+                            final columns =
+                                (constraints.maxWidth / (80 * scale))
+                                    .floor()
+                                    .clamp(1, 10);
+                            final start = rangePage * 50;
+                            final count = (episodes.length - start).clamp(
+                              0,
+                              50,
+                            );
+                            return GridView.builder(
+                              shrinkWrap: true,
+                              padding: EdgeInsets.zero,
+                              physics: const NeverScrollableScrollPhysics(),
+                              gridDelegate:
+                                  SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: columns,
+                                    crossAxisSpacing: 8,
+                                    mainAxisSpacing: 8,
+                                    mainAxisExtent: 48 * scale,
+                                  ),
+                              itemCount: count,
+                              itemBuilder: (context, offset) {
+                                final i = start + offset;
+                                final number = episodes[i].number;
+                                final selected = choosing
+                                    ? c.selected.contains(number)
+                                    : i == c.index;
+                                final colors = Theme.of(context).colorScheme;
+                                return Semantics(
+                                  selected: selected,
+                                  child: TextButton(
+                                    key: ValueKey('episode-$number'),
+                                    style: TextButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                      ),
+                                      backgroundColor: selected
+                                          ? colors.secondaryContainer
+                                          : Colors.white,
+                                      foregroundColor: selected
+                                          ? colors.onSecondaryContainer
+                                          : const Color(0xFF24242D),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                    ),
+                                    onPressed: () => choosing
+                                        ? c.toggleSelection(number)
+                                        : c.play(i),
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        Center(
+                                          child: FittedBox(
+                                            fit: BoxFit.scaleDown,
+                                            child: Text(
+                                              '第 $number 集',
+                                              style: const TextStyle(
+                                                fontSize: 13,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        if (selected)
+                                          const Positioned(
+                                            right: 0,
+                                            top: 2,
+                                            child: Icon(
+                                              Icons.check_rounded,
+                                              size: 12,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        ),
+                        if (pages > 1)
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              TextButton(
+                                onPressed: rangePage == 0
+                                    ? null
+                                    : () => setState(
+                                        () => episodePage = rangePage - 1,
+                                      ),
+                                child: const Text('前 50 集'),
+                              ),
+                              Text('${rangePage + 1} / $pages'),
+                              TextButton(
+                                onPressed: rangePage + 1 == pages
+                                    ? null
+                                    : () => setState(
+                                        () => episodePage = rangePage + 1,
+                                      ),
+                                child: const Text('后 50 集'),
+                              ),
+                            ],
+                          ),
+                        const SizedBox(height: 20),
+                      ],
                     ],
                   ),
                 ),
