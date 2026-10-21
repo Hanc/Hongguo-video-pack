@@ -11,7 +11,7 @@ on:
         required: true
         type: choice
         default: windows-latest
-        options: [windows-latest, ubuntu-latest]
+        options: [windows-latest, ubuntu-latest, publisher]
   workflow_call:
     inputs:
       tag:
@@ -20,7 +20,7 @@ on:
       runner:
         required: false
         type: string
-        default: windows-latest
+        default: ''
     secrets:
       GITEE_ACCESS:
         required: true
@@ -32,7 +32,7 @@ concurrency:
 jobs:
   mirror:
     if: vars.GITEE_REPOSITORY != ''
-    runs-on: ${{ inputs.runner || 'windows-latest' }}
+    runs-on: ${{ (inputs.runner || vars.GITEE_MIRROR_RUNNER) == 'publisher' && fromJSON('["self-hosted", "Linux", "X64", "hongputao-gitee-publisher"]') || inputs.runner || vars.GITEE_MIRROR_RUNNER || 'windows-latest' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7.0.1

@@ -9,6 +9,12 @@
 - 镜像发布先标记预发布，依次上传 Windows 安装器、arm64 APK、源码和 SHA256SUMS，并以免登录下载验证 SHA256。全部通过才转正式版。便携 ZIP 保留在 GitHub，避免超过镜像附件预算。
 - 应用内优先检查 Gitee 就绪正式版，国内源失败时回退 GitHub，不需要给终端用户配置任何令牌。
 
+### 独立发布节点（需服务器管理员确认）
+
+若 GitHub 托管 Runner 到 Gitee 的大包传输缓慢，可在可信服务器上部署 `scripts/prepare-release-runner.sh`。脚本创建专用非特权账号及 systemd 服务，目录 `/opt/hongputao-release-runner`，不开放入站监听。注册令牌从 stdin 传入；不复制现有 SSH 私钥。
+
+节点注册的标签为 `hongputao-gitee-publisher`。验证镜像成功后，将 GitHub 仓库变量 `GITEE_MIRROR_RUNNER` 设为 `publisher`，正式 Release 会自动使用此节点；手动镜像工作流也可选择 `publisher`。未配置时继续使用 GitHub 托管 Runner。只应给此节点安排可信主分支的发布任务，不运行不可信 PR 代码。
+
 工作流：`.github/workflows/release.yml`。
 
 - 推送与 pubspec 一致的版本标签，例如 `v0.3.0`：测试 → Android 正式签名构建 → Windows 构建/打包/安装卸载检查 → 创建 GitHub Release。

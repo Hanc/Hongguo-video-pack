@@ -37,8 +37,10 @@ def request(path, method='GET', body=None, raw=None, content_type=None, authenti
 def git_sync():
     auth = base64.b64encode((REPOSITORY.split('/')[0] + ':' + TOKEN).encode()).decode()
     env = dict(os.environ, GIT_TRACE='0', GIT_CURL_VERBOSE='0', GIT_TERMINAL_PROMPT='0')
-    command = ['git', '-c', 'credential.helper=', '-c', 'http.https://gitee.com/.extraheader=Authorization: Basic ' + auth,
-               'push', 'https://gitee.com/' + REPOSITORY + '.git', 'refs/remotes/origin/main:refs/heads/main', '--tags']
+    # Keep credentials out of process arguments on shared publisher hosts.
+    env.update(GIT_CONFIG_COUNT='2', GIT_CONFIG_KEY_0='credential.helper', GIT_CONFIG_VALUE_0='',
+               GIT_CONFIG_KEY_1='http.https://gitee.com/.extraheader', GIT_CONFIG_VALUE_1='Authorization: Basic ' + auth)
+    command = ['git', 'push', 'https://gitee.com/' + REPOSITORY + '.git', 'refs/remotes/origin/main:refs/heads/main', '--tags']
     result = subprocess.run(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode:
         raise RuntimeError('Gitee source sync failed; check token permission or divergent branches (no force push attempted)')
