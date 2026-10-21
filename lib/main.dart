@@ -86,9 +86,15 @@ Future<void> main(List<String> arguments) async {
 }
 
 class StudioApp extends StatelessWidget {
-  const StudioApp({super.key, this.controller, this.discoveryController});
+  const StudioApp({
+    super.key,
+    this.controller,
+    this.discoveryController,
+    this.updater,
+  });
   final StudioController? controller;
   final DiscoveryController? discoveryController;
+  final AppUpdater? updater;
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: '红葡萄',
@@ -141,25 +147,42 @@ class StudioApp extends StatelessWidget {
     home: StudioHome(
       controller: controller,
       discoveryController: discoveryController,
+      updater: updater,
     ),
   );
 }
 
 class StudioHome extends StatefulWidget {
-  const StudioHome({super.key, this.controller, this.discoveryController});
+  const StudioHome({
+    super.key,
+    this.controller,
+    this.discoveryController,
+    this.updater,
+  });
   final StudioController? controller;
   final DiscoveryController? discoveryController;
+  final AppUpdater? updater;
   @override
   State<StudioHome> createState() => _StudioHomeState();
 }
 
 class _StudioHomeState extends State<StudioHome> with WidgetsBindingObserver {
   late final StudioController c = widget.controller ?? StudioController();
-  final updater = AppUpdater();
+  late final updater = widget.updater ?? AppUpdater();
 
   Future<void> _checkUpdates({bool automatic = false}) async {
     await updater.check();
     if (!mounted) return;
+    if (automatic && updater.allSourcesFailed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('GitHub 和 Gitee 均检查失败，暂时无法获取更新。'),
+          duration: const Duration(seconds: 8),
+          action: SnackBarAction(label: '手动检查', onPressed: _showUpdates),
+        ),
+      );
+      return;
+    }
     if (!automatic) {
       _showUpdates();
       return;
@@ -380,6 +403,8 @@ class _StudioHomeState extends State<StudioHome> with WidgetsBindingObserver {
       _prepare();
       discovery.refresh();
       unawaited(_checkUpdates(automatic: true));
+    } else if (widget.updater != null) {
+      unawaited(_checkUpdates(automatic: true));
     }
   }
 
@@ -416,7 +441,7 @@ class _StudioHomeState extends State<StudioHome> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    updater.dispose();
+    if (widget.updater == null) updater.dispose();
     link.dispose();
     scroll.dispose();
     if (widget.discoveryController == null) discovery.dispose();

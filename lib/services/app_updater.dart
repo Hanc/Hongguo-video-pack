@@ -75,6 +75,21 @@ class AppRelease {
   );
 }
 
+enum UpdateSource {
+  automatic('自动（同版本优先 Gitee）'),
+  gitee('Gitee'),
+  github('GitHub');
+
+  const UpdateSource(this.label);
+  final String label;
+}
+
+class _ReleaseResult {
+  const _ReleaseResult(this.release, this.success);
+  final AppRelease? release;
+  final bool success;
+}
+
 class AppUpdater extends ChangeNotifier {
   AppUpdater({
     http.Client? client,
@@ -146,97 +161,102 @@ class AppUpdater extends ChangeNotifier {
     return response;
   }
 
+  UpdateSource selectedSource = UpdateSource.automatic;
+  final _sources = <UpdateSource, _ReleaseResult>{};
+  bool get allSourcesFailed =>
+      _sources.isNotEmpty && _sources.values.every((value) => !value.success);
+  String sourceStatus(UpdateSource source) {
+    final result = _sources[source];
+    if (result == null) return checking ? '检查中…' : '尚未检查';
+    if (!result.success) return '暂不可用';
+    return result.release == null
+        ? '暂无正式版安装包'
+        : '正式版 ${result.release!.version}';
+  }
+
+  void _adopt(AppRelease? value) {
+    if (release?.tag != value?.tag || release?.source != value?.source) {
+      readyFile = null;
+      _expectedHash = null;
+    }
+    release = value;
+  }
+
+  void _selectRelease() {
+    if (selectedSource != UpdateSource.automatic) {
+      final result = _sources[selectedSource];
+      _adopt(result?.release);
+      if (result == null || !result.success) {
+        error = '${selectedSource.label} 暂不可用，请重试或选择其他来源。';
+      }
+    } else {
+      final gitee = _sources[UpdateSource.gitee]?.release;
+      final github = _sources[UpdateSource.github]?.release;
+      _adopt(
+        gitee != null &&
+                (github == null || gitee.version.compareTo(github.version) >= 0)
+            ? gitee
+            : github,
+      );
+    }
+    if (allSourcesFailed) error = 'GitHub 和 Gitee 均检查失败，请检查网络后重试。';
+    status = release == null
+        ? (error.isEmpty ? '暂未找到可用正式版' : '未能完成检查')
+        : hasUpdate
+        ? '发现正式版 ${release!.version}（${release!.source}）'
+        : '当前无需更新（${release!.source} 正式版 ${release!.version}）';
+  }
+
+  void selectSource(UpdateSource source) {
+    if (checking || downloading || _disposed) return;
+    selectedSource = source;
+    error = '';
+    _selectRelease();
+    _notify();
+  }
+
+  Future<_ReleaseResult> _probe(Future<AppRelease?> Function() read) async {
+    try {
+      return _ReleaseResult(
+        await read().timeout(const Duration(seconds: 25)),
+        true,
+      );
+    } catch (_) {
+      return const _ReleaseResult(null, false);
+    }
+  }
+
   Future<void> check({bool githubOnly = false}) async {
     if (checking || downloading || _disposed) return;
     checking = true;
     error = '';
-    status = '正在检查正式版…';
+    status = '正在检查 GitHub 和 Gitee 正式版…';
     _notify();
     try {
       currentVersion = await _versionReader();
-      if (StableVersion.parse(currentVersion) == null) {
+      if (StableVersion.parse(currentVersion) == null)
         throw const FormatException('unsupported local version');
+      if (githubOnly) {
+        final result = await _probe(_githubLatest);
+        _sources[UpdateSource.github] = result;
+        _adopt(result.release);
+        if (!result.success) error = 'GitHub 暂不可用，请稍后重试。';
+        status = hasUpdate
+            ? '发现正式版 ${release!.version}（GitHub）'
+            : 'GitHub 检查完成';
+      } else {
+        // Start both requests before awaiting either; one failed source cannot suppress the other.
+        final results = await Future.wait([
+          _probe(_giteeLatest),
+          _probe(_githubLatest),
+        ]);
+        if (_disposed) return;
+        _sources[UpdateSource.gitee] = results[0];
+        _sources[UpdateSource.github] = results[1];
+        _selectRelease();
       }
-      if (!githubOnly && giteeRepository.isNotEmpty) {
-        try {
-          final mirrored = await _giteeLatest();
-          if (mirrored != null) {
-            if (release?.tag != mirrored.tag || release?.source != 'Gitee') {
-              readyFile = null;
-              _expectedHash = null;
-            }
-            release = mirrored;
-            status = hasUpdate
-                ? '发现正式版 ${mirrored.version}（国内镜像）'
-                : '当前无需更新（国内最新正式版 ${mirrored.version}）';
-            return;
-          }
-        } catch (_) {
-          /* Continue with GitHub when the mirror is unavailable. */
-        }
-      }
-      final candidates = <AppRelease>[];
-      for (var page = 1; page <= 20; page++) {
-        final response = await _get(
-          Uri.https(
-            'api.github.com',
-            '/repos/adoin/Hongguo-video-pack/releases',
-            {'per_page': '100', 'page': '$page'},
-          ),
-        );
-        final rows = jsonDecode(response.body) as List;
-        for (final row in rows.whereType<Map>()) {
-          if (row['draft'] != false || row['prerelease'] != false) continue;
-          final tag = row['tag_name'] as String? ?? '';
-          final version = StableVersion.parse(tag);
-          if (version == null) continue;
-          final assets = <String, ReleaseAsset>{};
-          for (final raw in (row['assets'] as List? ?? []).whereType<Map>()) {
-            final name = raw['name'] as String? ?? '';
-            final size = raw['size'] as int? ?? 0;
-            if (size <= 0 || raw['state'] != 'uploaded') continue;
-            // Construct the repository URL ourselves; never execute arbitrary URLs from metadata.
-            final url = _assetUrl(tag, name);
-            if (raw['browser_download_url'] != url.toString()) continue;
-            assets[name] = ReleaseAsset(
-              name: name,
-              size: size,
-              url: url,
-              digest: raw['digest'] as String?,
-            );
-          }
-          final name = platform == 'windows'
-              ? 'Hongputao-Windows-$version-Setup.exe'
-              : platform == 'android'
-              ? 'Hongputao-Android-arm64-$version.apk'
-              : '';
-          candidates.add(
-            AppRelease(
-              tag: tag,
-              version: version,
-              notes: row['body'] as String? ?? '',
-              installer: assets[name],
-              checksums: assets['SHA256SUMS.txt'],
-            ),
-          );
-        }
-        if (rows.length < 100) break;
-        if (page == 20) {
-          throw const FormatException('release listing too large');
-        }
-      }
-      candidates.sort((a, b) => b.version.compareTo(a.version));
-      final latest = candidates.firstOrNull;
-      if (release?.tag != latest?.tag || release?.source != 'GitHub') {
-        readyFile = null;
-        _expectedHash = null;
-      }
-      release = latest;
-      status = hasUpdate
-          ? '发现正式版 ${release!.version}'
-          : '当前已是最新正式版（$currentVersion）';
     } catch (_) {
-      error = '检查更新失败，请检查网络或稍后重试（GitHub 可能暂时限流）。';
+      error = '无法读取当前版本或检查更新，请稍后重试。';
       status = '未能完成检查';
     } finally {
       checking = false;
@@ -244,11 +264,66 @@ class AppUpdater extends ChangeNotifier {
     }
   }
 
+  Future<AppRelease?> _githubLatest() async {
+    final candidates = <AppRelease>[];
+    for (var page = 1; page <= 20; page++) {
+      final response = await _get(
+        Uri.https(
+          'api.github.com',
+          '/repos/adoin/Hongguo-video-pack/releases',
+          {'per_page': '100', 'page': '$page'},
+        ),
+      );
+      final rows = jsonDecode(response.body) as List;
+      for (final row in rows.whereType<Map>()) {
+        if (row['draft'] != false || row['prerelease'] != false) continue;
+        final tag = row['tag_name'] as String? ?? '';
+        final version = StableVersion.parse(tag);
+        if (version == null) continue;
+        final assets = <String, ReleaseAsset>{};
+        for (final raw in (row['assets'] as List? ?? []).whereType<Map>()) {
+          final name = raw['name'] as String? ?? '';
+          final size = raw['size'] as int? ?? 0;
+          if (size <= 0 || raw['state'] != 'uploaded') continue;
+          // Construct the repository URL ourselves; never execute arbitrary URLs from metadata.
+          final url = _assetUrl(tag, name);
+          if (raw['browser_download_url'] != url.toString()) continue;
+          assets[name] = ReleaseAsset(
+            name: name,
+            size: size,
+            url: url,
+            digest: raw['digest'] as String?,
+          );
+        }
+        final name = platform == 'windows'
+            ? 'Hongputao-Windows-$version-Setup.exe'
+            : platform == 'android'
+            ? 'Hongputao-Android-arm64-$version.apk'
+            : '';
+        candidates.add(
+          AppRelease(
+            tag: tag,
+            version: version,
+            notes: row['body'] as String? ?? '',
+            installer: assets[name],
+            checksums: assets['SHA256SUMS.txt'],
+          ),
+        );
+      }
+      if (rows.length < 100) break;
+      if (page == 20) {
+        throw const FormatException('release listing too large');
+      }
+    }
+    candidates.sort((a, b) => b.version.compareTo(a.version));
+    return candidates.firstOrNull;
+  }
+
   Future<AppRelease?> _giteeLatest() async {
     if (!RegExp(
       r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$',
     ).hasMatch(giteeRepository)) {
-      return null;
+      throw const FormatException('mirror repository unavailable');
     }
     final releases = <AppRelease>[];
     for (var page = 1; page <= 20; page++) {
@@ -343,7 +418,10 @@ class AppUpdater extends ChangeNotifier {
 
   Future<void> download() async {
     if (downloading || checking || _disposed) return;
-    final mirrored = release?.source == 'Gitee';
+    final mirrored =
+        selectedSource == UpdateSource.automatic && release?.source == 'Gitee';
+    final attemptedRelease = release;
+    final attemptedVersion = release?.version;
     await _downloadSingle();
     if (mirrored &&
         !_cancelled &&
@@ -353,7 +431,16 @@ class AppUpdater extends ChangeNotifier {
       status = '国内镜像暂不可用，正在切换 GitHub…';
       _notify();
       await check(githubOnly: true);
-      if (hasUpdate && error.isEmpty) await _downloadSingle();
+      if (hasUpdate &&
+          error.isEmpty &&
+          attemptedVersion != null &&
+          release!.version.compareTo(attemptedVersion) >= 0) {
+        await _downloadSingle();
+      } else if (error.isEmpty) {
+        _adopt(attemptedRelease);
+        error = '国内下载失败，GitHub 暂未提供相同或更新版本。可手动选择来源重试。';
+        _notify();
+      }
     }
   }
 

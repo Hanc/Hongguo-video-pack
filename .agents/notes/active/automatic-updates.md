@@ -16,7 +16,7 @@ modules: [自动更新, GitHub Release, Gitee 镜像]
 > action里面代码自动同步gitee release自动同步gitee，能做到吗
 
 - 启动自动检查，“关于”提供手动检查。版本来自已安装包的 PackageInfo，不使用容易遗漏的手写版本常量。
-- GitHub 为构建来源，Gitee 为国内镜像。Gitee 有就绪正式版时使用国内检查结果，包含“无需更新”的情形，不强制依赖 GitHub 可达；国内无就绪版本/请求失败或下载失败时回退 GitHub。无登录、无内置私人令牌，不使用第三方公共代理。
+- 启动并行检查 GitHub 与 Gitee；两者均失败时显示非阻断警告及手动检查入口，单源失败不阻止使用另一源。自动选择最新就绪正式版，同版本优先 Gitee；自动模式下国内下载失败可回退 GitHub 的相同或更新版本，不降级。手动入口可选自动 / Gitee / GitHub，明确选择单源时不暗中切换。无登录、无内置私人令牌，不使用第三方公共代理。
 - 只识别可选 v/V 前缀的三段正式版本号；跳过 draft / prerelease 标记及 beta、alpha、rc、构建元数据等后缀。按整数比较而非字符串，不降级。
 - Windows 选 Setup.exe，Android 选 arm64 APK。下载中可取消；网络失败、尺寸异常、SHA256 不匹配都不执行；安装前再次校验。
 - 安装需用户点击和系统安装向导确认。拼接任务或素材加载未完成时不安装。Windows 保存状态后启动安装器退出；Android 只共享应用 `data/updates/` 内 APK，包名须相同，未知来源授权交给系统。
@@ -41,3 +41,4 @@ modules: [自动更新, GitHub Release, Gitee 镜像]
 - 用户已确认目标父目录为夸克根目录下的 `releases`；最终路径为 `releases/Hongguo-video-pack/v版本号/`，授权后定位其真实 FID，不将网盘根目录 FID 当作 releases 的 FID。
 - 备份与 Gitee 镜像独立；失败单独报告，不撤销 GitHub 已发布版本。首次必须完成私下授权及目标文件夹确认，未就绪前保持关闭。
 - 实施入口、变量与验收边界见 `docs/quark-release-backup.md`。当前只有流程代码和模拟验证，不宣称网盘已接通。
+- LA 官方 CLI 已安装，用户授权成功，根目录 releases 的真实文件夹标识已配置；首次 v0.3.0 备份排队验证中。QUARK_BACKUP_ENABLED 已开启以允许该任务及后续正式版独立备份，实际上传未验证前不能宣称完成。

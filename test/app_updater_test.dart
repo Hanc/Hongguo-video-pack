@@ -41,6 +41,65 @@ Map<String, dynamic> release(
 
 void main() {
   test(
+    'both sources start concurrently and warn only when both fail',
+    () async {
+      final requested = <String>{};
+      final gate = Completer<void>();
+      final updater = AppUpdater(
+        versionReader: () async => '1.0.0',
+        platform: 'windows',
+        client: MockClient((request) async {
+          requested.add(request.url.host);
+          if (requested.length == 2) gate.complete();
+          await gate.future;
+          return http.Response('', 503);
+        }),
+      );
+      addTearDown(updater.dispose);
+      await updater.check();
+      expect(requested, {'gitee.com', 'api.github.com'});
+      expect(updater.allSourcesFailed, isTrue);
+      expect(updater.error, contains('均检查失败'));
+    },
+  );
+  test(
+    'automatic uses newest stable and manual source stays selected',
+    () async {
+      final mirror = release('v2.0.0');
+      for (final asset in mirror['assets'] as List) {
+        asset['browser_download_url'] =
+            (asset['browser_download_url'] as String).replaceFirst(
+              'github.com',
+              'gitee.com',
+            );
+      }
+      final updater = AppUpdater(
+        versionReader: () async => '1.0.0',
+        platform: 'windows',
+        client: MockClient(
+          (request) async => http.Response(
+            jsonEncode([
+              request.url.host == 'gitee.com' ? mirror : release('v3.0.0'),
+            ]),
+            200,
+          ),
+        ),
+      );
+      addTearDown(updater.dispose);
+      await updater.check();
+      expect(updater.release!.source, 'GitHub');
+      updater.readyFile = File('unused-test-package');
+      updater.selectSource(UpdateSource.gitee);
+      expect(updater.readyFile, isNull);
+      expect(updater.release!.source, 'Gitee');
+      await updater.check();
+      expect(updater.selectedSource, UpdateSource.gitee);
+      expect(updater.release!.source, 'Gitee');
+      updater.selectSource(UpdateSource.automatic);
+      expect(updater.release!.version.toString(), '3.0.0');
+    },
+  );
+  test(
     'healthy current mirror does not depend on GitHub availability',
     () async {
       final row = release('v2.0.0');
@@ -67,7 +126,7 @@ void main() {
       await updater.check();
       expect(updater.error, isEmpty);
       expect(updater.hasUpdate, false);
-      expect(githubCalls, 0);
+      expect(githubCalls, 1);
     },
   );
   test(
@@ -167,29 +226,35 @@ void main() {
     expect(updater.status, '已取消下载');
     expect(await dir.list().isEmpty, true);
   });
-  test('ready domestic release wins without a GitHub request', () async {
-    var githubCalls = 0;
-    final row = release('v2.0.0');
-    for (final asset in row['assets'] as List) {
-      asset['browser_download_url'] = (asset['browser_download_url'] as String)
-          .replaceFirst('github.com', 'gitee.com');
-      asset.remove('size');
-      asset.remove('state');
-      asset.remove('digest');
-    }
-    final updater = AppUpdater(
-      versionReader: () async => '1.0.0',
-      platform: 'windows',
-      client: MockClient((request) async {
-        if (request.url.host == 'api.github.com') githubCalls++;
-        return http.Response(jsonEncode([row]), 200);
-      }),
-    );
-    addTearDown(updater.dispose);
-    await updater.check();
-    expect(updater.release!.source, 'Gitee');
-    expect(githubCalls, 0);
-  });
+  test(
+    'both sources are checked and domestic release wins for the same version',
+    () async {
+      var githubCalls = 0;
+      final row = release('v2.0.0');
+      for (final asset in row['assets'] as List) {
+        asset['browser_download_url'] =
+            (asset['browser_download_url'] as String).replaceFirst(
+              'github.com',
+              'gitee.com',
+            );
+        asset.remove('size');
+        asset.remove('state');
+        asset.remove('digest');
+      }
+      final updater = AppUpdater(
+        versionReader: () async => '1.0.0',
+        platform: 'windows',
+        client: MockClient((request) async {
+          if (request.url.host == 'api.github.com') githubCalls++;
+          return http.Response(jsonEncode([row]), 200);
+        }),
+      );
+      addTearDown(updater.dispose);
+      await updater.check();
+      expect(updater.release!.source, 'Gitee');
+      expect(githubCalls, 1);
+    },
+  );
   test('incomplete or unavailable mirror falls back to GitHub', () async {
     final updater = AppUpdater(
       versionReader: () async => '1.0.0',

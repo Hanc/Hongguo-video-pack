@@ -47,7 +47,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
         );
       }
     } catch (_) {
-      if (mounted) setState(() => message = '无法启动安装，请重试或打开 GitHub 发布页下载。');
+      if (mounted) setState(() => message = '无法启动安装，请重试或打开对应发布页下载。');
     } finally {
       if (mounted) setState(() => installing = false);
     }
@@ -67,7 +67,26 @@ class _UpdateScreenState extends State<UpdateScreen> {
               '当前版本：${updater.currentVersion.isEmpty ? '读取中…' : updater.currentVersion}',
             ),
             const SizedBox(height: 8),
-            const Text('只更新 GitHub 正式版，忽略 beta、alpha、rc 等预发布版本。'),
+            const Text('只更新正式版，忽略 beta、alpha、rc 等预发布版本。'),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<UpdateSource>(
+              key: ValueKey(updater.selectedSource),
+              initialValue: updater.selectedSource,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: '更新来源'),
+              items: [
+                for (final source in UpdateSource.values)
+                  DropdownMenuItem(value: source, child: Text(source.label)),
+              ],
+              onChanged: updater.checking || updater.downloading || installing
+                  ? null
+                  : (value) {
+                      if (value != null) updater.selectSource(value);
+                    },
+            ),
+            const SizedBox(height: 12),
+            Text('Gitee：${updater.sourceStatus(UpdateSource.gitee)}'),
+            Text('GitHub：${updater.sourceStatus(UpdateSource.github)}'),
             const SizedBox(height: 20),
             Text(
               updater.status,
@@ -111,7 +130,8 @@ class _UpdateScreenState extends State<UpdateScreen> {
                     !updater.downloading &&
                     updater.readyFile == null)
                   FilledButton(
-                    onPressed: updater.release!.installer == null
+                    onPressed:
+                        updater.checking || updater.release!.installer == null
                         ? null
                         : updater.download,
                     child: const Text('下载更新'),
