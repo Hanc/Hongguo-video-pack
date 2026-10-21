@@ -35,6 +35,10 @@ jobs:
     runs-on: ${{ (inputs.runner || vars.GITEE_MIRROR_RUNNER) == 'publisher' && fromJSON('["self-hosted", "Linux", "X64", "hongputao-gitee-publisher"]') || inputs.runner || vars.GITEE_MIRROR_RUNNER || 'windows-latest' }}
     timeout-minutes: 30
     steps:
+      - name: Add isolated publisher tools
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: echo /opt/hongputao-release-runner/bin >> "$GITHUB_PATH"
       - uses: actions/checkout@v7.0.1
         with:
           ref: main

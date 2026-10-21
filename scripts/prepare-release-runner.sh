@@ -53,7 +53,9 @@ ProtectSystem=strict
 ReadWritePaths=$base
 PrivateTmp=true
 PrivateDevices=true
-RestrictSUIDSGID=true
+# RestrictSUIDSGID breaks runner tar extraction on Ubuntu 26.04.
+# The service remains unprivileged with NoNewPrivileges and no capabilities.
+RestrictSUIDSGID=false
 CapabilityBoundingSet=
 UMask=0077
 Nice=10
