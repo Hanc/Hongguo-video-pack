@@ -24,3 +24,11 @@ modules: [自动更新, GitHub Release, Gitee 镜像]
 - GitHub Release 成功后调用 `mirror-gitee.yml`，支持手动补同步旧正式版。GITEE_ACCESS 只在 Actions Secret 使用。镜像上传 Setup、APK、源码及 SHA256SUMS；便携 ZIP 留在 GitHub。
 - 镜像先标记 prerelease，附件上传后必须验证无需登录可下载及 SHA256，全部通过才转正式版，避免客户端获取半成品。
 - 用户验收前保持 active；构建、模拟更新、真实镜像同步和手机系统安装应分别报告。
+
+## LA 镜像发布节点
+
+- 用户已批准常驻 LA 节点，以及安装 `libicu78`。仓库专用 Runner 名称 / 标签为 `hongputao-gitee-publisher`，以独立普通账号运行，不开放入站发布端口。
+- 节点只负责下载 GitHub 已构建的发布包、校验并上传 Gitee，不承担 Windows / Android 构建。其他仓库接入需要分别注册 Runner 和配置发布权限。
+- Ubuntu 26.04 上启用 `RestrictSUIDSGID` 时，Runner 解压 checkout Action 报 `Function not implemented`；用户批准后仅关闭此项，同一任务解压及检出成功。保留 NoNewPrivileges、空 capabilities、ProtectSystem 和专用目录写入限制。
+- Runner 会重建工具 PATH；工作流通过 GITHUB_PATH 加入专用工具目录。Python 优先使用节点现有 python3，不要求全局 python 别名。
+- 正式版同步实际通过后，再将仓库变量 `GITEE_MIRROR_RUNNER` 设为 `publisher`；此前只手动验证已有 v0.3.0，不创建新 Tag。
