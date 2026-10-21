@@ -112,7 +112,8 @@ def mirror_release(tag, directory):
             'tag_name': tag, 'name': '红葡萄 ' + tag[1:], 'body': metadata['body'] + '\n\nWindows 安装包 / Android APK 与 GitHub 使用相同 SHA256。便携 ZIP 请从 GitHub 下载。',
             'target_commitish': tag, 'prerelease': True})
     release_id = release['id']
-    names.append('SHA256SUMS.txt')
+    # Verify authentication and public download with small files before large uploads.
+    names = ['SHA256SUMS.txt', names[2], names[1], names[0]]
     hashes['SHA256SUMS.txt'] = digest(directory / 'SHA256SUMS.txt')
     for name in names:
         release = request(endpoint)
