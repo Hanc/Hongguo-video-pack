@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hongguo_studio/app_controller.dart';
 import 'package:hongguo_studio/domain/discovery.dart';
+import 'package:hongguo_studio/domain/drama.dart';
 import 'package:hongguo_studio/playback_controller.dart';
 import 'package:hongguo_studio/playback_view.dart';
 import 'playback_controller_test.dart'
@@ -216,5 +217,51 @@ void main() {
     expect(find.text('进入全屏'), findsOneWidget);
     expect(find.byTooltip('退出全屏'), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  // 红果短剧多为竖屏（1080×1920）。对竖屏内容强制横屏只会出现黑边，
+  // 所以方向必须按视频自身比例决定，而不是一律横屏。
+  test('fullscreen orientation follows the video aspect', () {
+    // 竖屏短剧：全屏也保持竖屏，只隐藏系统栏。
+    expect(
+      orientationsFor(fullscreen: true, landscape: false),
+      [DeviceOrientation.portraitUp],
+    );
+    // 横屏内容：才真的转横屏。
+    expect(
+      orientationsFor(fullscreen: true, landscape: true),
+      [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight],
+    );
+    // 宽高未知时不强行旋转，避免在竖屏短剧上转出黑边。
+    expect(
+      orientationsFor(fullscreen: true, landscape: null),
+      [DeviceOrientation.portraitUp],
+    );
+    // 退出全屏一律回竖屏。
+    expect(
+      orientationsFor(fullscreen: false, landscape: true),
+      [DeviceOrientation.portraitUp],
+    );
+  });
+
+  test('media variant exposes landscape only when both sides are known', () {
+    const vertical = MediaVariant(
+      url: 'u',
+      quality: 1080,
+      codec: 'hevc',
+      width: 1080,
+      height: 1920,
+    );
+    const horizontal = MediaVariant(
+      url: 'u',
+      quality: 1080,
+      codec: 'hevc',
+      width: 1920,
+      height: 1080,
+    );
+    const unknown = MediaVariant(url: 'u', quality: 1080, codec: 'hevc');
+    expect(vertical.isLandscape, isFalse);
+    expect(horizontal.isLandscape, isTrue);
+    expect(unknown.isLandscape, isNull);
   });
 }

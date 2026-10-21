@@ -45,6 +45,7 @@ class _PlaybackScreenState extends State<PlaybackScreen>
   bool choosing = false, preparing = false;
   bool _showInfo = false;
   bool _fullscreen = false;
+  StreamSubscription<VideoParams>? _videoParams;
   static const _platform = MethodChannel('dev.hongguo.studio/platform');
 
   /// 倍速属于播放器自身能力，放进控制栏，不占用页面布局。
@@ -106,10 +107,8 @@ class _PlaybackScreenState extends State<PlaybackScreen>
         child: MaterialVideoControls(state),
       );
       if (desktop) return themed;
-      if (!fullscreen ||
-          MediaQuery.orientationOf(context) != Orientation.landscape) {
-        return themed;
-      }
+      // 竖屏短剧全屏后仍然是竖屏，此时同样需要手势。
+      if (!fullscreen) return themed;
       final player = _native!.player;
       return PlaybackGestures(
         position: () => player.state.position,
@@ -162,6 +161,10 @@ class _PlaybackScreenState extends State<PlaybackScreen>
       _native = NativePlaybackEngine();
       _video = VideoController(_native!.player);
     }
+    // 全屏状态下切到不同比例的剧集时，方向要跟着内容走。
+    _videoParams = _native?.player.stream.videoParams.listen((_) {
+      if (_fullscreen) unawaited(_applyOrientation(true));
+    });
     c =
         widget.controller ??
         PlaybackController(
@@ -215,6 +218,7 @@ class _PlaybackScreenState extends State<PlaybackScreen>
     HardwareKeyboard.instance.removeHandler(_onKeyEvent);
     WidgetsBinding.instance.removeObserver(this);
     _infoTimer?.cancel();
+    unawaited(_videoParams?.cancel());
     // 离开播放页时不能把设备锁在横屏。
     if (_fullscreen) unawaited(_applyOrientation(false));
     if (widget.controller == null) c.dispose();
@@ -297,18 +301,17 @@ class _PlaybackScreenState extends State<PlaybackScreen>
 
   /// 全屏转横屏、退出转回竖屏；顺带切换沉浸式状态栏。
   ///
+  /// 红果短剧多数是竖屏视频（1080×1920），对这类内容强行横屏只会得到两侧
+  /// 大片黑边。所以这里按视频自身比例决定：竖屏内容全屏时保持竖屏，只把
+  /// 系统栏藏起来；只有横屏内容才真的转成横屏。
+  ///
   /// 只在移动端执行。这里用 [Platform] 而不是 `Theme.of(context).platform`，
   /// 因为回调发生在全屏路由里，那个位置的主题未必可靠。
   Future<void> _applyOrientation(bool fullscreen) async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
     try {
       await SystemChrome.setPreferredOrientations(
-        fullscreen
-            ? const [
-                DeviceOrientation.landscapeLeft,
-                DeviceOrientation.landscapeRight,
-              ]
-            : const [DeviceOrientation.portraitUp],
+        orientationsFor(fullscreen: fullscreen, landscape: _videoLandscape()),
       );
       await SystemChrome.setEnabledSystemUIMode(
         fullscreen ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge,
@@ -316,6 +319,18 @@ class _PlaybackScreenState extends State<PlaybackScreen>
     } catch (_) {
       /* 不允许旋转的容器里静默跳过。 */
     }
+  }
+
+  /// 优先用来源返回的像素尺寸（开播前就有），退回播放器实际解码尺寸。
+  bool? _videoLandscape() {
+    if (c.variants.isNotEmpty) {
+      final bySource = chooseQuality(c.variants, c.quality).isLandscape;
+      if (bySource != null) return bySource;
+    }
+    final width = _native?.player.state.width ?? 0;
+    final height = _native?.player.state.height ?? 0;
+    if (width <= 0 || height <= 0) return null;
+    return width > height;
   }
 
   Future<void> _togglePlay() async {
@@ -866,6 +881,25 @@ class _PlaybackScreenState extends State<PlaybackScreen>
 }
 
 /// 播放器控制栏里的倍速入口：显示当前倍速，点击选择新档位。
+/// 全屏方向：竖屏短剧保持竖屏，横屏内容才转横屏。
+///
+/// [landscape] 为 null 表示宽高未知（还没取到媒体信息），此时不强行旋转，
+/// 只维持竖屏以免在竖屏短剧上转出黑边。
+@visibleForTesting
+List<DeviceOrientation> orientationsFor({
+  required bool fullscreen,
+  required bool? landscape,
+}) {
+  if (!fullscreen) return const [DeviceOrientation.portraitUp];
+  if (landscape == true) {
+    return const [
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ];
+  }
+  return const [DeviceOrientation.portraitUp];
+}
+
 /// 全屏左上角的返回按钮。
 ///
 /// 优先按 media_kit 的方式退出全屏；拿不到全屏上下文时直接关闭承载全屏的

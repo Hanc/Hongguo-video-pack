@@ -58,6 +58,9 @@ List<MediaVariant> parsePlaybackInfo(Json info) {
       codec: codec == 'bytevc1' ? 'hevc' : codec,
       key: key,
       duration: double.tryParse(text(info['video_duration'])) ?? 0,
+      // 保留来源给的像素尺寸，用于判断这部短剧是竖屏还是横屏。
+      width: width > 0 ? width : 0,
+      height: height > 0 ? height : 0,
     );
     if (!results.containsKey(quality) || {'h264', 'avc1'}.contains(codec)) {
       results[quality] = media;
@@ -378,6 +381,8 @@ List<MediaVariant> parseVariants(Json model) {
       duration:
           double.tryParse(text(model['video_duration'] ?? model['duration'])) ??
           0,
+      width: width > 0 ? width : 0,
+      height: height > 0 ? height : 0,
     );
     if (!variants.containsKey(quality) || {'h264', 'avc1'}.contains(codec)) {
       variants[quality] = variant;

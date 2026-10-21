@@ -26,6 +26,8 @@ class MediaVariant {
     this.duration = 0,
     this.downloadable = true,
     this.source = 'App 接口',
+    this.width = 0,
+    this.height = 0,
   });
   final String url, codec;
   final String? key;
@@ -33,7 +35,17 @@ class MediaVariant {
   final double duration;
   final bool downloadable;
   final String source;
+
+  /// 来源返回的视频像素尺寸。红果短剧多为竖屏（例如 1080×1920），
+  /// 全屏时应据此决定是否旋转，而不是一律转成横屏。
+  final int width, height;
   String get label => '${quality}P · ${codec.toUpperCase()}';
+
+  /// 宽高都未知时返回 null，表示无法判断方向。
+  bool? get isLandscape {
+    if (width <= 0 || height <= 0) return null;
+    return width > height;
+  }
 }
 
 MediaVariant chooseQuality(List<MediaVariant> variants, int target) {
