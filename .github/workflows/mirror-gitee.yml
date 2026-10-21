@@ -45,4 +45,4 @@ jobs:
           GITEE_ACCESS: ${{ secrets.GITEE_ACCESS }}
           GITEE_REPOSITORY: ${{ vars.GITEE_REPOSITORY }}
           RELEASE_TAG: ${{ inputs.tag }}
-        run: python3 scripts/gitee-sync.py release "$RELEASE_TAG" mirror-dist
+        run: python3 -u scripts/gitee-sync.py release "$RELEASE_TAG" mirror-dist

@@ -80,11 +80,20 @@ def verify_public(url, expected):
 
 
 def upload(release_id, path):
-    boundary = 'hongputao-' + uuid.uuid4().hex
-    payload = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{path.name}"\r\n'
-               'Content-Type: application/octet-stream\r\n\r\n').encode() + path.read_bytes() + f'\r\n--{boundary}--\r\n'.encode()
-    request(f'/repos/{REPOSITORY}/releases/{release_id}/attach_files', 'POST', raw=payload,
-            content_type='multipart/form-data; boundary=' + boundary)
+    print('Uploading mirror attachment: ' + path.name, flush=True)
+    # Stream multipart with curl rather than buffering a large request body.
+    # Authentication is passed on stdin, not in command arguments or logs.
+    url = f'https://gitee.com/api/v5/repos/{REPOSITORY}/releases/{release_id}/attach_files'
+    config = 'url = ' + json.dumps(url) + '\nheader = ' + json.dumps('Authorization: Bearer ' + TOKEN) + '\n'
+    result = subprocess.run(['curl', '--config', '-', '--http1.1', '--silent', '--show-error',
+                             '--connect-timeout', '30', '--max-time', '900', '--speed-limit', '1024', '--speed-time', '90',
+                             '--form', 'file=@' + str(path), '--write-out', '\n%{http_code}'],
+                            input=config.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    response, _, status = result.stdout.rpartition(b'\n')
+    if result.returncode or status not in (b'200', b'201'):
+        raise RuntimeError('Attachment upload failed (curl code ' + str(result.returncode) + ', HTTP ' + status.decode(errors='replace') + ')')
+    if response:
+        json.loads(response)
 
 
 def mirror_release(tag, directory):
@@ -111,7 +120,17 @@ def mirror_release(tag, directory):
         if asset is None:
             if not release['prerelease']:
                 raise RuntimeError('Existing stable mirror is incomplete; refusing to alter published release')
-            upload(release_id, directory / name)
+            for attempt in range(2):
+                try:
+                    upload(release_id, directory / name)
+                    break
+                except RuntimeError:
+                    after = request(endpoint)
+                    if any(asset.get('name') == name for asset in after.get('assets', [])):
+                        break
+                    if attempt == 1:
+                        raise
+                    print('Retrying interrupted attachment upload once.', flush=True)
             release = request(endpoint)
             asset = next((asset for asset in release.get('assets', []) if asset.get('name') == name), None)
         if asset is None:
