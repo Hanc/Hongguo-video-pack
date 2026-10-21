@@ -705,6 +705,28 @@ class _StudioHomeState extends State<StudioHome> with WidgetsBindingObserver {
                       ],
                     ),
                   ),
+                if (!wide)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                    child: Row(
+                      children: [
+                        const Text(
+                          '红葡萄',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: _showAbout,
+                          child: Text(_versionLabel),
+                        ),
+                        IconButton(
+                          onPressed: _showUpdates,
+                          tooltip: '检查更新',
+                          icon: const Icon(Icons.system_update_alt, size: 20),
+                        ),
+                      ],
+                    ),
+                  ),
                 Expanded(
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -828,62 +850,6 @@ class _StudioHomeState extends State<StudioHome> with WidgetsBindingObserver {
                                     ],
                                   ],
                                   const SizedBox(height: 20),
-                                  TextButton(
-                                    onPressed: () => showAboutDialog(
-                                      context: context,
-                                      applicationName: '红葡萄',
-                                      applicationVersion:
-                                          updater.currentVersion.isEmpty
-                                          ? '本地版本'
-                                          : updater.currentVersion,
-                                      applicationLegalese:
-                                          '访客来源 · 本地制作\n包含 GPL-3.0 协议适配与 FFmpeg 组件。源码与第三方声明随交付包提供。',
-                                      children: [
-                                        TextButton(
-                                          onPressed: () {
-                                            Navigator.of(context).pop();
-                                            _showUpdates();
-                                          },
-                                          child: const Text('检查更新'),
-                                        ),
-                                        TextButton(
-                                          onPressed: () async {
-                                            final notices = await rootBundle
-                                                .loadString(
-                                                  'THIRD_PARTY_NOTICES.md',
-                                                );
-                                            if (!context.mounted) return;
-                                            showDialog<void>(
-                                              context: context,
-                                              builder: (ctx) => AlertDialog(
-                                                title: const Text('第三方声明'),
-                                                content: SingleChildScrollView(
-                                                  child: SelectableText(
-                                                    notices,
-                                                  ),
-                                                ),
-                                                actions: [
-                                                  TextButton(
-                                                    onPressed: () =>
-                                                        Navigator.pop(ctx),
-                                                    child: const Text('关闭'),
-                                                  ),
-                                                ],
-                                              ),
-                                            );
-                                          },
-                                          child: const Text('第三方声明'),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Text(
-                                      '红葡萄 · ${updater.currentVersion.isEmpty ? '本地版本' : 'v${updater.currentVersion}'} · 关于与许可',
-                                      style: const TextStyle(
-                                        fontSize: 11,
-                                        color: muted,
-                                      ),
-                                    ),
-                                  ),
                                 ],
                               ),
                             ),
@@ -899,6 +865,48 @@ class _StudioHomeState extends State<StudioHome> with WidgetsBindingObserver {
         ),
       );
     },
+  );
+
+  String get _versionLabel =>
+      updater.currentVersion.isEmpty ? '本地版本' : 'v${updater.currentVersion}';
+
+  void _showAbout() => showAboutDialog(
+    context: context,
+    applicationName: '红葡萄',
+    applicationVersion: updater.currentVersion.isEmpty
+        ? '本地版本'
+        : updater.currentVersion,
+    applicationLegalese:
+        '本工具仅供学习交流使用，严禁任何商用行为，否则后果自负。\n\n访客来源 · 本地制作\n包含 GPL-3.0 协议适配与 FFmpeg 组件。源码与第三方声明随交付包提供。',
+    children: [
+      TextButton(
+        onPressed: () {
+          Navigator.of(context).pop();
+          _showUpdates();
+        },
+        child: const Text('检查更新'),
+      ),
+      TextButton(
+        onPressed: () async {
+          final notices = await rootBundle.loadString('THIRD_PARTY_NOTICES.md');
+          if (!mounted) return;
+          showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('第三方声明'),
+              content: SingleChildScrollView(child: SelectableText(notices)),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('关闭'),
+                ),
+              ],
+            ),
+          );
+        },
+        child: const Text('第三方声明'),
+      ),
+    ],
   );
 
   Widget _sidebar() => Container(
@@ -966,7 +974,24 @@ class _StudioHomeState extends State<StudioHome> with WidgetsBindingObserver {
             ),
           ),
         const Spacer(),
-        const SizedBox(height: 32),
+        IconButton(
+          onPressed: _showUpdates,
+          tooltip: '检查更新',
+          icon: const Icon(
+            Icons.system_update_alt,
+            color: Color(0xFFCACAD2),
+            size: 20,
+          ),
+        ),
+        TextButton(
+          onPressed: _showAbout,
+          style: TextButton.styleFrom(
+            foregroundColor: const Color(0xFFCACAD2),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
+          ),
+          child: Text(_versionLabel, style: const TextStyle(fontSize: 11)),
+        ),
+        const SizedBox(height: 16),
       ],
     ),
   );
