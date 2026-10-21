@@ -151,6 +151,13 @@ jobs:
             dist/*.exe dist/*.apk dist/*.zip dist/SHA256SUMS.txt \
             --verify-tag --title "红葡萄 ${RELEASE_VERSION}" --generate-notes
 
+  quark-backup:
+    needs: [quality, release]
+    if: vars.QUARK_BACKUP_ENABLED == 'true'
+    uses: ./.github/workflows/backup-quark.yml
+    with:
+      tag: v${{ needs.quality.outputs.version }}
+
   mirror:
     needs: [quality, release]
     if: vars.GITEE_REPOSITORY != ''
