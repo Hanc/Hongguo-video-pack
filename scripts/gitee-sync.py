@@ -85,13 +85,15 @@ def upload(release_id, path):
     # Authentication is passed on stdin, not in command arguments or logs.
     url = f'https://gitee.com/api/v5/repos/{REPOSITORY}/releases/{release_id}/attach_files'
     config = 'url = ' + json.dumps(url) + '\nheader = ' + json.dumps('Authorization: Bearer ' + TOKEN) + '\n'
-    result = subprocess.run(['curl', '--config', '-', '--header', 'Expect:', '--silent', '--show-error',
-                             '--connect-timeout', '30', '--max-time', '900', '--speed-limit', '1024', '--speed-time', '90',
-                             '--form', 'file=@' + str(path), '--write-out', '\n%{http_code}'],
+    timeout = '60' if path.stat().st_size < 10 * 1024 * 1024 else '900'
+    result = subprocess.run(['curl', '--config', '-', '--http1.1', '--header', 'Expect:', '--silent', '--show-error',
+                             '--connect-timeout', '20', '--max-time', timeout, '--speed-limit', '1024', '--speed-time', '60',
+                             '--form', 'file=@' + str(path), '--write-out', '\n%{http_code} %{size_upload} %{time_total}'],
                             input=config.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    response, _, status = result.stdout.rpartition(b'\n')
+    response, _, metrics = result.stdout.rpartition(b'\n')
+    status = metrics.split(b' ')[0]
     if result.returncode or status not in (b'200', b'201'):
-        raise RuntimeError('Attachment upload failed (curl code ' + str(result.returncode) + ', HTTP ' + status.decode(errors='replace') + ')')
+        raise RuntimeError('Attachment upload failed (curl code ' + str(result.returncode) + ', HTTP/bytes/seconds ' + metrics.decode(errors='replace') + ')')
     if response:
         json.loads(response)
 
