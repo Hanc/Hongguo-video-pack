@@ -2,7 +2,7 @@
 
 仅备份已经在 GitHub 发布的正式版，不上传应用运行数据、签名材料或视频。
 
-目录：用户指定文件夹 / Hongguo-video-pack / v版本号。每版五个文件：Windows Setup、Windows 便携 ZIP、Android arm64 APK、对应源码 ZIP、SHA256SUMS.txt。
+目录：夸克根目录的 `releases/Hongguo-video-pack/v版本号/`（用户已确认父目录为根目录下的 releases）。每版五个文件：Windows Setup、Windows 便携 ZIP、Android arm64 APK、对应源码 ZIP、SHA256SUMS.txt。
 
 ## 首次接入
 
