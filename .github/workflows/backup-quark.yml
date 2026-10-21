@@ -51,3 +51,7 @@ jobs:
         if: failure()
         shell: bash
         run: echo '::warning::Quark backup failed. GitHub Release remains published; inspect the backup job before retrying.'
+      - name: Remove temporary release packages
+        if: always()
+        shell: bash
+        run: python3 scripts/cleanup-release-downloads.py quark-dist

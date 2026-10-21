@@ -15,6 +15,7 @@ import tempfile
 def cli(script, *arguments):
     process = subprocess.run(
         ['node', str(script), *map(str, arguments)],
+        env={**os.environ, 'AI_AGENT': 'codex'},
         capture_output=True, text=True, encoding='utf-8', timeout=1800)
     result = None
     for line in process.stdout.splitlines():

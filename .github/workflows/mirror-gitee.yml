@@ -66,3 +66,12 @@ jobs:
           else
             python -u scripts/gitee-sync.py release "$RELEASE_TAG" mirror-dist
           fi
+      - name: Remove temporary release packages
+        if: always()
+        shell: bash
+        run: |
+          if command -v python3 >/dev/null 2>&1; then
+            python3 scripts/cleanup-release-downloads.py mirror-dist
+          else
+            python scripts/cleanup-release-downloads.py mirror-dist
+          fi

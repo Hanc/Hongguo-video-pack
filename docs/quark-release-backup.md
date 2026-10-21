@@ -9,7 +9,7 @@
 1. 在 LA 专用发布账号的私有目录安装并审核夸克官方 CLI，需要 Node.js；安装远程软件前取得用户确认。不要在公开工作流中执行登录或输出授权配置。
 2. 由用户完成账号 OAuth 授权并选择目标文件夹；凭据只由官方 CLI 在节点私有目录维护，不进入 Git 仓库、Release 或 Actions 日志。
 3. 配置 GitHub 仓库变量 QUARK_CLI_PATH（官方 quark-drive.cjs 绝对路径）与 QUARK_PARENT_FID（用户选定文件夹 FID）。先确认专用服务账号能够访问 CLI 与授权状态。
-4. 配置 QUARK_BACKUP_ENABLED=true，手动运行 backup-quark.yml，先验证已有 v0.3.0。当前尚未安装 CLI、授权、配置目标文件夹或启用自动备份。
+4. 配置 QUARK_BACKUP_ENABLED=true，手动运行 backup-quark.yml，先验证已有 v0.3.0。当前已在 LA 发布账号目录安装官方 CLI 1.0.25，复用 Runner 自带 Node.js，等待用户授权；未配置目标文件夹或启用自动备份。
 
 工具参考：https://github.com/quark-clouddrive/quarkclouddrive_offical
 
@@ -21,3 +21,6 @@
 - 成功条件为 CLI 确认五个文件上传成功，且完整目录清单数量为五。当前不把文件数量确认表述为云端字节 SHA256 校验；SHA256SUMS 留在网盘供恢复时核验。
 - 授权过期时任务失败，私下重新授权后再处理；没有后台自动登录、Cookie 抓取或自动清理旧版本。
 - 实际账号上传、授权续期、跨境吞吐和远程恢复校验均须首次接入后验收，当前仅代码及模拟测试。
+- CLI 使用 Codex 集成身份识别授权配置；SSH 不会自动携带该标记，由调用进程显式传入 AI_AGENT=codex，不修改官方工具或跳过 OAuth。
+- 发布包临时落盘，任务成功或失败后通过 always 清理下载目录；不长期保留版本包。进程强杀、主机宕机时 finally/always 无法保证执行，恢复后须定向检查清理。授权配置和运行工具保留。
+- 首次配置已清理约 431 MB 旧工具安装缓存及失败镜像任务下载包；Runner 本身约 691 MB 常驻，夸克工具不足 1 MB，不把工具常驻占用说成零。
