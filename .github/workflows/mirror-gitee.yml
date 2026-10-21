@@ -6,23 +6,33 @@ on:
         description: Existing stable GitHub release tag
         required: true
         type: string
+      runner:
+        description: Runner used for cross-site attachment transfer
+        required: true
+        type: choice
+        default: windows-latest
+        options: [windows-latest, ubuntu-latest]
   workflow_call:
     inputs:
       tag:
         required: true
         type: string
+      runner:
+        required: false
+        type: string
+        default: windows-latest
     secrets:
       GITEE_ACCESS:
         required: true
 permissions:
   contents: read
 concurrency:
-  group: gitee-release-${{ inputs.tag }}
+  group: gitee-release-${{ inputs.tag }}-${{ inputs.runner }}
   cancel-in-progress: false
 jobs:
   mirror:
     if: vars.GITEE_REPOSITORY != ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'windows-latest' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7.0.1
@@ -45,4 +55,5 @@ jobs:
           GITEE_ACCESS: ${{ secrets.GITEE_ACCESS }}
           GITEE_REPOSITORY: ${{ vars.GITEE_REPOSITORY }}
           RELEASE_TAG: ${{ inputs.tag }}
-        run: python3 -u scripts/gitee-sync.py release "$RELEASE_TAG" mirror-dist
+        shell: bash
+        run: python -u scripts/gitee-sync.py release "$RELEASE_TAG" mirror-dist
