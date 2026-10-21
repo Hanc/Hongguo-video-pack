@@ -85,7 +85,7 @@ def upload(release_id, path):
     # Authentication is passed on stdin, not in command arguments or logs.
     url = f'https://gitee.com/api/v5/repos/{REPOSITORY}/releases/{release_id}/attach_files'
     config = 'url = ' + json.dumps(url) + '\nheader = ' + json.dumps('Authorization: Bearer ' + TOKEN) + '\n'
-    result = subprocess.run(['curl', '--config', '-', '--http1.1', '--silent', '--show-error',
+    result = subprocess.run(['curl', '--config', '-', '--header', 'Expect:', '--silent', '--show-error',
                              '--connect-timeout', '30', '--max-time', '900', '--speed-limit', '1024', '--speed-time', '90',
                              '--form', 'file=@' + str(path), '--write-out', '\n%{http_code}'],
                             input=config.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -125,7 +125,8 @@ def mirror_release(tag, directory):
                 try:
                     upload(release_id, directory / name)
                     break
-                except RuntimeError:
+                except RuntimeError as error:
+                    print(str(error), flush=True)
                     after = request(endpoint)
                     if any(asset.get('name') == name for asset in after.get('assets', [])):
                         break
