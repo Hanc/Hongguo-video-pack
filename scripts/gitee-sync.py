@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -26,7 +27,7 @@ def request(path, method='GET', body=None, raw=None, content_type=None, authenti
         headers['Content-Type'] = content_type
     url = path if path.startswith('https://') else 'https://gitee.com/api/v5' + path
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, data=raw, headers=headers, method=method), timeout=300) as response:
+        with urllib.request.urlopen(urllib.request.Request(url, data=raw, headers=headers, method=method), timeout=30) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:
         if error.code == 404 and method == 'GET':
@@ -73,12 +74,29 @@ def packages(directory, version):
 def verify_public(url, expected):
     if not url.startswith('https://gitee.com/' + REPOSITORY + '/releases/download/'):
         raise RuntimeError('Unexpected Gitee attachment URL')
-    calculated = hashlib.sha256()
-    with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'Hongputao-Release-Mirror'}), timeout=300) as response:
-        for chunk in iter(lambda: response.read(1024 * 1024), b''):
-            calculated.update(chunk)
-    if calculated.hexdigest() != expected:
-        raise RuntimeError('Public mirror attachment failed SHA256 verification')
+    for attempt in range(2):
+        calculated = hashlib.sha256()
+        received = 0
+        started = time.monotonic()
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={
+                    'User-Agent': 'Hongputao-Release-Mirror', 'Cache-Control': 'no-cache'}), timeout=30) as response:
+                declared = int(response.headers.get('Content-Length') or 0)
+                for chunk in iter(lambda: response.read(1024 * 1024), b''):
+                    received += len(chunk)
+                    calculated.update(chunk)
+                    if received > 100 * 1024 * 1024 or time.monotonic() - started > 240:
+                        raise RuntimeError('Public mirror verification exceeded transfer budget')
+            if declared and declared != received:
+                raise RuntimeError(f'Public mirror download was incomplete ({received}/{declared} bytes)')
+            if calculated.hexdigest() != expected:
+                raise RuntimeError(f'Public mirror attachment failed SHA256 verification ({received} bytes)')
+            return
+        except (OSError, RuntimeError) as error:
+            if attempt:
+                raise RuntimeError('Public mirror verification failed twice: ' +
+                                   (str(error) if isinstance(error, RuntimeError) else type(error).__name__)) from None
+            print('Public download verification interrupted; retrying this read once.', flush=True)
 
 
 def upload(release_id, path):
@@ -122,7 +140,6 @@ def mirror_release(tag, directory):
     names = ['SHA256SUMS.txt', names[2], names[1], names[0]]
     hashes['SHA256SUMS.txt'] = digest(directory / 'SHA256SUMS.txt')
     for name in names:
-        release = request(endpoint)
         asset = next((asset for asset in release.get('assets', []) if asset.get('name') == name), None)
         if asset is None:
             if not release['prerelease']:

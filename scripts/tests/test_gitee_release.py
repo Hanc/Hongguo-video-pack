@@ -1,4 +1,6 @@
 import importlib.util
+import hashlib
+import io
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -9,6 +11,26 @@ spec.loader.exec_module(mirror)
 
 
 class ReleaseFinalizationTest(unittest.TestCase):
+    def test_truncated_download_retries_and_checks_full_hash(self):
+        data = b'complete installer bytes'
+        partial = io.BytesIO(data[:4])
+        partial.headers = {'Content-Length': str(len(data))}
+        complete = io.BytesIO(data)
+        complete.headers = {'Content-Length': str(len(data))}
+        with patch.object(mirror.urllib.request, 'urlopen', side_effect=[partial, complete]) as fetch:
+            mirror.verify_public('https://gitee.com/adoin/Hongguo-video-pack/releases/download/v0.3.0/setup.exe',
+                                 hashlib.sha256(data).hexdigest())
+            self.assertEqual(fetch.call_count, 2)
+
+    def test_repeated_bad_hash_never_passes(self):
+        replies = [io.BytesIO(b'bad'), io.BytesIO(b'bad')]
+        for reply in replies:
+            reply.headers = {'Content-Length': '3'}
+        with patch.object(mirror.urllib.request, 'urlopen', side_effect=replies):
+            with self.assertRaisesRegex(RuntimeError, 'failed twice'):
+                mirror.verify_public('https://gitee.com/adoin/Hongguo-video-pack/releases/download/v0.3.0/setup.exe',
+                                     hashlib.sha256(b'expected').hexdigest())
+
     def run_release(self, fail_verification=False, confirmed=True):
         assets = [{'name': name, 'browser_download_url':
                    'https://gitee.com/adoin/Hongguo-video-pack/releases/download/v0.3.0/' + name}
