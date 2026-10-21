@@ -41,6 +41,36 @@ Map<String, dynamic> release(
 
 void main() {
   test(
+    'healthy current mirror does not depend on GitHub availability',
+    () async {
+      final row = release('v2.0.0');
+      for (final asset in row['assets'] as List) {
+        asset['browser_download_url'] =
+            (asset['browser_download_url'] as String).replaceFirst(
+              'github.com',
+              'gitee.com',
+            );
+      }
+      var githubCalls = 0;
+      final updater = AppUpdater(
+        versionReader: () async => '2.0.0',
+        platform: 'windows',
+        client: MockClient((request) async {
+          if (request.url.host == 'api.github.com') {
+            githubCalls++;
+            return http.Response('', 403);
+          }
+          return http.Response(jsonEncode([row]), 200);
+        }),
+      );
+      addTearDown(updater.dispose);
+      await updater.check();
+      expect(updater.error, isEmpty);
+      expect(updater.hasUpdate, false);
+      expect(githubCalls, 0);
+    },
+  );
+  test(
     'broken mirror download retries GitHub with checksum verification',
     () async {
       final root = Directory(

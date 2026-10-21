@@ -160,15 +160,15 @@ class AppUpdater extends ChangeNotifier {
       if (!githubOnly && giteeRepository.isNotEmpty) {
         try {
           final mirrored = await _giteeLatest();
-          if (mirrored != null &&
-              mirrored.version.compareTo(StableVersion.parse(currentVersion)!) >
-                  0) {
+          if (mirrored != null) {
             if (release?.tag != mirrored.tag || release?.source != 'Gitee') {
               readyFile = null;
               _expectedHash = null;
             }
             release = mirrored;
-            status = '发现正式版 ${mirrored.version}（国内镜像）';
+            status = hasUpdate
+                ? '发现正式版 ${mirrored.version}（国内镜像）'
+                : '当前无需更新（国内最新正式版 ${mirrored.version}）';
             return;
           }
         } catch (_) {
