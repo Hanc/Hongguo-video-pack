@@ -40,5 +40,5 @@ modules: [自动更新, GitHub Release, Gitee 镜像]
 - 用户明确备份对象为发布包。GitHub 正式版发布后可独立备份到用户指定夸克文件夹下的项目 / 版本目录，包含 Windows 安装包、便携 ZIP、APK、源码和校验文件。
 - 用户已确认目标父目录为夸克根目录下的 `releases`；最终路径为 `releases/Hongguo-video-pack/v版本号/`，授权后定位其真实 FID，不将网盘根目录 FID 当作 releases 的 FID。
 - 备份与 Gitee 镜像独立；失败单独报告，不撤销 GitHub 已发布版本。首次必须完成私下授权及目标文件夹确认，未就绪前保持关闭。
-- 实施入口、变量与验收边界见 `docs/quark-release-backup.md`。当前只有流程代码和模拟验证，不宣称网盘已接通。
-- LA 官方 CLI 已安装，用户授权成功，根目录 releases 的真实文件夹标识已配置；首次 v0.3.0 备份排队验证中。QUARK_BACKUP_ENABLED 已开启以允许该任务及后续正式版独立备份，实际上传未验证前不能宣称完成。
+- 实施入口、变量与验收边界见 `docs/quark-release-backup.md`。LA 官方 CLI 已安装并授权，QUARK_BACKUP_ENABLED 已启用，正式版发布后独立备份。
+- 2026-10-21 首次 v0.3.0 备份 Actions 39576112923 成功，五文件上传步骤约 38 秒，云端目录数量确认完成；任务清理及 SSH 复查确认无发布包留存。仍未进行云端全量下载 SHA256 及授权续期验收。
