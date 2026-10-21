@@ -22,7 +22,7 @@ modules: [自动更新, GitHub Release, Gitee 镜像]
 - 安装需用户点击和系统安装向导确认。拼接任务或素材加载未完成时不安装。Windows 保存状态后启动安装器退出；Android 只共享应用 `data/updates/` 内 APK，包名须相同，未知来源授权交给系统。
 - `.github/workflows/sync-gitee.yml` 在 main / v* Tag 更新后同步 main 与标签，不 force push；Gitee 分叉需显式处理。
 - GitHub Release 成功后调用 `mirror-gitee.yml`，支持手动补同步旧正式版。GITEE_ACCESS 只在 Actions Secret 使用。镜像上传 Setup、APK、源码及 SHA256SUMS；便携 ZIP 留在 GitHub。
-- 镜像先标记 prerelease，附件上传后必须验证无需登录可下载及 SHA256，全部通过才转正式版，避免客户端获取半成品。
+- 镜像先标记 prerelease，全部附件上传成功后转正式版。用户 2026-10-21 明确调整：LA 上传 Gitee 后不再下载附件验证；每个文件最多 3 次上传尝试（含首次），成功即删除本地文件，最终失败也由任务 always 清理剩余下载包。响应丢失只查询附件元数据，已存在则不重复上传。GitHub → LA 的来源 SHA256 校验与客户端安装前校验保留。
 - 用户验收前保持 active；构建、模拟更新、真实镜像同步和手机系统安装应分别报告。
 
 ## LA 镜像发布节点
@@ -31,8 +31,8 @@ modules: [自动更新, GitHub Release, Gitee 镜像]
 - 节点只负责下载 GitHub 已构建的发布包、校验并上传 Gitee，不承担 Windows / Android 构建。其他仓库接入需要分别注册 Runner 和配置发布权限。
 - Ubuntu 26.04 上启用 `RestrictSUIDSGID` 时，Runner 解压 checkout Action 报 `Function not implemented`；用户批准后仅关闭此项，同一任务解压及检出成功。保留 NoNewPrivileges、空 capabilities、ProtectSystem 和专用目录写入限制。
 - Runner 会重建工具 PATH；工作流通过 GITHUB_PATH 加入专用工具目录。Python 优先使用节点现有 python3，不要求全局 python 别名。
-- 正式版同步实际通过后，再将仓库变量 `GITEE_MIRROR_RUNNER` 设为 `publisher`；此前只手动验证已有 v0.3.0，不创建新 Tag。
-- 节点已通过 Action 解压、源码检出和已有安装包下载；2026-10-21 验证仍受 Gitee Release API 响应阻塞，独立 20 秒探测未收到响应。不能据此宣称镜像上传已通过或更新源已就绪。
+- 2026-10-21 v0.3.0 镜像任务 39577820232 已完整成功，Windows Setup、APK、源码及校验文件就绪，预览标记已取消，临时包清理成功。仓库变量 GITEE_MIRROR_RUNNER 已设为 publisher，后续 Tag 发版自动经 LA 上传。
+- 首次验收曾遇到 Gitee 接口无响应、上传响应丢失、PATCH 缺少必填元数据及下载不完整；已补齐 PATCH 元数据。验收时 Windows Setup 经独立下载确认 83,402,753 字节、SHA256 与 GitHub 一致；后续遵循最新要求，不重复下载校验镜像。
 - 源码同步仅由 sync-gitee 工作流执行，附件镜像不再重复推 main，避免下载期间 main 已更新造成非快进冲突。
 
 ## 夸克发布包备份

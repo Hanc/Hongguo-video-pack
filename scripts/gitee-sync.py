@@ -7,10 +7,8 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import time
 import urllib.error
 import urllib.request
-import uuid
 
 REPOSITORY = os.environ.get('GITEE_REPOSITORY', 'adoin/Hongguo-video-pack')
 TOKEN = os.environ.get('GITEE_ACCESS', '')
@@ -71,34 +69,6 @@ def packages(directory, version):
     return names, hashes
 
 
-def verify_public(url, expected):
-    if not url.startswith('https://gitee.com/' + REPOSITORY + '/releases/download/'):
-        raise RuntimeError('Unexpected Gitee attachment URL')
-    for attempt in range(2):
-        calculated = hashlib.sha256()
-        received = 0
-        started = time.monotonic()
-        try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers={
-                    'User-Agent': 'Hongputao-Release-Mirror', 'Cache-Control': 'no-cache'}), timeout=30) as response:
-                declared = int(response.headers.get('Content-Length') or 0)
-                for chunk in iter(lambda: response.read(1024 * 1024), b''):
-                    received += len(chunk)
-                    calculated.update(chunk)
-                    if received > 100 * 1024 * 1024 or time.monotonic() - started > 240:
-                        raise RuntimeError('Public mirror verification exceeded transfer budget')
-            if declared and declared != received:
-                raise RuntimeError(f'Public mirror download was incomplete ({received}/{declared} bytes)')
-            if calculated.hexdigest() != expected:
-                raise RuntimeError(f'Public mirror attachment failed SHA256 verification ({received} bytes)')
-            return
-        except (OSError, RuntimeError) as error:
-            if attempt:
-                raise RuntimeError('Public mirror verification failed twice: ' +
-                                   (str(error) if isinstance(error, RuntimeError) else type(error).__name__)) from None
-            print('Public download verification interrupted; retrying this read once.', flush=True)
-
-
 def upload(release_id, path):
     print('Uploading mirror attachment: ' + path.name, flush=True)
     # Stream multipart with curl rather than buffering a large request body.
@@ -110,18 +80,37 @@ def upload(release_id, path):
                              '--connect-timeout', '20', '--max-time', timeout, '--speed-limit', '1024', '--speed-time', '60',
                              '--form', 'file=@' + str(path), '--write-out', '\n%{http_code} %{size_upload} %{time_total}'],
                             input=config.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    response, _, metrics = result.stdout.rpartition(b'\n')
+    _, _, metrics = result.stdout.rpartition(b'\n')
     status = metrics.split(b' ')[0]
     if result.returncode or status not in (b'200', b'201'):
         raise RuntimeError('Attachment upload failed (curl code ' + str(result.returncode) + ', HTTP/bytes/seconds ' + metrics.decode(errors='replace') + ')')
-    if response:
-        json.loads(response)
+
+
+def upload_with_retries(release_id, path, endpoint):
+    for attempt in range(3):
+        try:
+            upload(release_id, path)
+            return
+        except RuntimeError as error:
+            print(str(error), flush=True)
+            # A lost response can occur after Gitee accepted the file. Only
+            # consult attachment metadata to avoid a duplicate; never download it.
+            try:
+                after = request(endpoint)
+                if any(asset.get('name') == path.name for asset in (after or {}).get('assets', [])):
+                    print('Gitee attachment is present after interrupted response: ' + path.name)
+                    return
+            except (RuntimeError, OSError):
+                print('Could not confirm attachment metadata after interrupted response.', flush=True)
+            if attempt == 2:
+                raise RuntimeError('Attachment upload failed after 3 attempts: ' + path.name) from None
+            print(f'Retrying attachment upload ({attempt + 2}/3).', flush=True)
 
 
 def mirror_release(tag, directory):
     if not re.fullmatch(r'v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)', tag):
         raise RuntimeError('Only stable vMAJOR.MINOR.PATCH tags may be mirrored')
-    names, hashes = packages(directory, tag[1:])
+    names, _ = packages(directory, tag[1:])
     metadata = json.loads(subprocess.check_output(['gh', 'release', 'view', tag, '--repo', 'adoin/Hongguo-video-pack',
                                                  '--json', 'isDraft,isPrerelease,body']))
     if metadata['isDraft'] or metadata['isPrerelease']:
@@ -136,32 +125,19 @@ def mirror_release(tag, directory):
             'tag_name': tag, 'name': '红葡萄 ' + tag[1:], 'body': metadata['body'] + '\n\nWindows 安装包 / Android APK 与 GitHub 使用相同 SHA256。便携 ZIP 请从 GitHub 下载。',
             'target_commitish': tag, 'prerelease': True})
     release_id = release['id']
-    # Verify authentication and public download with small files before large uploads.
+    # Upload small files first; successful uploads do not trigger a re-download.
     names = ['SHA256SUMS.txt', names[2], names[1], names[0]]
-    hashes['SHA256SUMS.txt'] = digest(directory / 'SHA256SUMS.txt')
     for name in names:
         asset = next((asset for asset in release.get('assets', []) if asset.get('name') == name), None)
         if asset is None:
             if not release['prerelease']:
                 raise RuntimeError('Existing stable mirror is incomplete; refusing to alter published release')
-            for attempt in range(2):
-                try:
-                    upload(release_id, directory / name)
-                    break
-                except RuntimeError as error:
-                    print(str(error), flush=True)
-                    after = request(endpoint)
-                    if any(asset.get('name') == name for asset in after.get('assets', [])):
-                        break
-                    if attempt == 1:
-                        raise
-                    print('Retrying interrupted attachment upload once.', flush=True)
-            release = request(endpoint)
-            asset = next((asset for asset in release.get('assets', []) if asset.get('name') == name), None)
-        if asset is None:
-            raise RuntimeError('Uploaded attachment is absent: ' + name)
-        verify_public(asset['browser_download_url'], hashes[name])
-        print('Public download SHA256 verified: ' + name)
+            upload_with_retries(release_id, directory / name, endpoint)
+        (directory / name).unlink(missing_ok=True)
+        print('Gitee attachment accepted; local file removed: ' + name)
+    if release['prerelease'] is False:
+        print('Stable Gitee mirror is already ready: ' + tag)
+        return
     # Gitee requires tag, title and body even when changing only prerelease.
     updated = request(f'/repos/{REPOSITORY}/releases/{release_id}', 'PATCH', {
         'tag_name': tag,
