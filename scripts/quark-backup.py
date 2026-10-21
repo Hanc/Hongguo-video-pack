@@ -58,6 +58,31 @@ def packages(directory, tag):
     return [directory / name for name in [*names, 'SHA256SUMS.txt']]
 
 
+def missing_files(listing, files, scratch):
+    if listing.get('hasMore') is not False:
+        raise RuntimeError('Incomplete cloud listing; refusing duplicate uploads or overwrites')
+    if listing.get('count') == 0:
+        return files
+    listing_file = Path(listing.get('file_path', '')).resolve()
+    if not listing_file.is_relative_to(Path(scratch).resolve()) or not listing_file.is_file():
+        raise RuntimeError('Cloud listing unavailable; refusing duplicate uploads or overwrites')
+    expected = {file.name: file for file in files}
+    found = set()
+    for line in listing_file.read_text(encoding='utf-8').splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        name = row.get('filename')
+        if (name not in expected or name in found or
+                str(row.get('file_type')) != '1' or
+                row.get('size') != expected[name].stat().st_size):
+            raise RuntimeError('Existing cloud files conflict with release; refusing overwrite')
+        found.add(name)
+    if len(found) != listing.get('count'):
+        raise RuntimeError('Cloud listing count is inconsistent')
+    return [file for file in files if file.name not in found]
+
+
 def backup(directory, tag, script, parent, scratch):
     # Validation happens before creating any remote folders.
     files = packages(directory, tag)
@@ -74,13 +99,15 @@ def backup(directory, tag, script, parent, scratch):
     if not folder_id:
         raise RuntimeError('Quark did not return the version folder identity')
     existing = cli(script, 'browse', '--parent-fid', folder_id, '--all', '--task-dir', scratch)
-    if existing.get('count') != 0 or existing.get('hasMore') is not False:
-        raise RuntimeError('Version folder is not confirmed empty; refusing duplicate uploads or overwrites')
-    result = cli(script, 'upload', *files, '--parent-fid', folder_id)
-    if result.get('successCount') != len(files) or result.get('failedCount', 0) != 0:
-        raise RuntimeError('Quark did not confirm all release files uploaded')
+    pending = missing_files(existing, files, scratch)
+    if pending:
+        result = cli(script, 'upload', *pending, '--parent-fid', folder_id)
+        if result.get('successCount') != len(pending) or result.get('failedCount', 0) != 0:
+            raise RuntimeError('Quark did not confirm all release files uploaded')
+    else:
+        print('All expected backup names and sizes already present; skipping upload.')
     final = cli(script, 'browse', '--parent-fid', folder_id, '--all', '--task-dir', scratch)
-    if final.get('count') != len(files) or final.get('hasMore') is not False:
+    if missing_files(final, files, scratch):
         raise RuntimeError('Quark folder listing did not confirm the expected file count')
     print(f'Quark backup completed: Hongguo-video-pack/{tag} ({len(files)} files).')
     print('Source SHA256 verified; cloud upload result and file count confirmed. Remote bytes were not downloaded for hash verification.')
