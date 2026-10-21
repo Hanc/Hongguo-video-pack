@@ -145,7 +145,14 @@ def mirror_release(tag, directory):
             raise RuntimeError('Uploaded attachment is absent: ' + name)
         verify_public(asset['browser_download_url'], hashes[name])
         print('Public download SHA256 verified: ' + name)
-    request(f'/repos/{REPOSITORY}/releases/{release_id}', 'PATCH', {'prerelease': False})
+    # Gitee requires tag, title and body even when changing only prerelease.
+    updated = request(f'/repos/{REPOSITORY}/releases/{release_id}', 'PATCH', {
+        'tag_name': tag,
+        'name': release['name'],
+        'body': release.get('body') or metadata['body'],
+        'prerelease': False})
+    if updated.get('prerelease') is not False:
+        raise RuntimeError('Gitee did not confirm the stable release state')
     print('Stable Gitee mirror is ready: ' + tag)
 
 

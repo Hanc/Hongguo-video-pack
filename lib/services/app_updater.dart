@@ -234,8 +234,9 @@ class AppUpdater extends ChangeNotifier {
     _notify();
     try {
       currentVersion = await _versionReader();
-      if (StableVersion.parse(currentVersion) == null)
+      if (StableVersion.parse(currentVersion) == null) {
         throw const FormatException('unsupported local version');
+      }
       if (githubOnly) {
         final result = await _probe(_githubLatest);
         _sources[UpdateSource.github] = result;
