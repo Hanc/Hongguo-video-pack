@@ -25,6 +25,21 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.hongguo.studio/platform").setMethodCallHandler { call, result ->
             try {
                 when (call.method) {
+                    "installUpdate" -> {
+                        val file = File(requireNotNull(call.argument<String>("path"))).canonicalFile
+                        val updateDir = File(filesDir, "data/updates").canonicalFile
+                        require(file.isFile && file.extension == "apk" && file.path.startsWith(updateDir.path + File.separator))
+                        val archive = requireNotNull(packageManager.getPackageArchiveInfo(file.path, 0))
+                        require(archive.packageName == packageName)
+                        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+                            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                            result.success(false)
+                        } else {
+                            val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
+                            startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                            result.success(true)
+                        }
+                    }
                     "playbackLevels" -> {
                         if (originalPlaybackBrightness == null) originalPlaybackBrightness = window.attributes.screenBrightness
                         val audio = getSystemService(AUDIO_SERVICE) as AudioManager

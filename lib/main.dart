@@ -21,6 +21,9 @@ import 'services/playback_acceptance.dart';
 import 'watch_history.dart';
 import 'watch_history_view.dart';
 import 'services/history_acceptance.dart';
+import 'services/app_updater.dart';
+import 'update_view.dart';
+import 'services/update_acceptance.dart';
 
 const accent = Color(0xFFC20032);
 const ink = Color(0xFF24242D);
@@ -53,14 +56,17 @@ Future<void> main(List<String> arguments) async {
       arguments.contains('--acceptance') ||
       arguments.contains('--search-acceptance') ||
       arguments.contains('--playback-acceptance') ||
-      arguments.contains('--history-acceptance')) {
+      arguments.contains('--history-acceptance') ||
+      arguments.contains('--update-acceptance')) {
     runApp(
       const MaterialApp(
         home: Scaffold(body: Center(child: Text('正在验证本地视频引擎…'))),
       ),
     );
     try {
-      if (arguments.contains('--history-acceptance')) {
+      if (arguments.contains('--update-acceptance')) {
+        await runUpdateAcceptance();
+      } else if (arguments.contains('--history-acceptance')) {
         await runHistoryAcceptance();
       } else if (arguments.contains('--playback-acceptance')) {
         await runPlaybackAcceptance();
@@ -149,6 +155,73 @@ class StudioHome extends StatefulWidget {
 
 class _StudioHomeState extends State<StudioHome> with WidgetsBindingObserver {
   late final StudioController c = widget.controller ?? StudioController();
+  final updater = AppUpdater();
+
+  Future<void> _checkUpdates({bool automatic = false}) async {
+    await updater.check();
+    if (!mounted) return;
+    if (!automatic) {
+      _showUpdates();
+      return;
+    }
+    if (!updater.hasUpdate ||
+        c.busy ||
+        ModalRoute.of(context)?.isCurrent != true) {
+      return;
+    }
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('发现正式版 ${updater.release!.version}'),
+        content: Text('当前版本 ${updater.currentVersion}，是否查看并下载更新？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('稍后'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('查看更新'),
+          ),
+        ],
+      ),
+    );
+    if (accepted == true && mounted) _showUpdates();
+  }
+
+  void _showUpdates() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => UpdateScreen(
+          updater: updater,
+          busy: () => c.busy || c.loading,
+          openRelease: _open,
+          install: () async {
+            if (c.busy || c.loading) throw StateError('task busy');
+            final file = await updater.verifyForInstall();
+            if (c.busy || c.loading) throw StateError('task busy');
+            await c.flush();
+            if (Platform.isWindows) {
+              await Process.start(file.path, [
+                '/NORESTART',
+              ], mode: ProcessStartMode.detached);
+              await windowManager.close();
+              return true;
+            }
+            if (Platform.isAndroid) {
+              return await NativeRequestSigner.channel.invokeMethod<bool>(
+                    'installUpdate',
+                    {'path': file.path},
+                  ) ??
+                  false;
+            }
+            throw UnsupportedError('unsupported platform');
+          },
+        ),
+      ),
+    );
+  }
+
   final link = TextEditingController(text: demoUrl);
   bool _saving = false;
   late final discovery = widget.discoveryController ?? DiscoveryController();
@@ -306,6 +379,7 @@ class _StudioHomeState extends State<StudioHome> with WidgetsBindingObserver {
     if (widget.controller == null) {
       _prepare();
       discovery.refresh();
+      unawaited(_checkUpdates(automatic: true));
     }
   }
 
@@ -342,6 +416,7 @@ class _StudioHomeState extends State<StudioHome> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    updater.dispose();
     link.dispose();
     scroll.dispose();
     if (widget.discoveryController == null) discovery.dispose();
@@ -506,7 +581,7 @@ class _StudioHomeState extends State<StudioHome> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: c,
+    listenable: Listenable.merge([c, updater]),
     builder: (context, _) {
       final wide = MediaQuery.sizeOf(context).width >= 1050;
       return PopScope(
@@ -732,10 +807,20 @@ class _StudioHomeState extends State<StudioHome> with WidgetsBindingObserver {
                                     onPressed: () => showAboutDialog(
                                       context: context,
                                       applicationName: '红葡萄',
-                                      applicationVersion: '0.4.0',
+                                      applicationVersion:
+                                          updater.currentVersion.isEmpty
+                                          ? '本地版本'
+                                          : updater.currentVersion,
                                       applicationLegalese:
                                           '访客来源 · 本地制作\n包含 GPL-3.0 协议适配与 FFmpeg 组件。源码与第三方声明随交付包提供。',
                                       children: [
+                                        TextButton(
+                                          onPressed: () {
+                                            Navigator.of(context).pop();
+                                            _showUpdates();
+                                          },
+                                          child: const Text('检查更新'),
+                                        ),
                                         TextButton(
                                           onPressed: () async {
                                             final notices = await rootBundle
@@ -766,9 +851,9 @@ class _StudioHomeState extends State<StudioHome> with WidgetsBindingObserver {
                                         ),
                                       ],
                                     ),
-                                    child: const Text(
-                                      '红葡萄 · v0.4.0 · 关于与许可',
-                                      style: TextStyle(
+                                    child: Text(
+                                      '红葡萄 · ${updater.currentVersion.isEmpty ? '本地版本' : 'v${updater.currentVersion}'} · 关于与许可',
+                                      style: const TextStyle(
                                         fontSize: 11,
                                         color: muted,
                                       ),

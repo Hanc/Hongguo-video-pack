@@ -1,7 +1,7 @@
 name: hongguo_studio
 description: A borderless desktop and Android short drama assembly workspace.
 publish_to: none
-version: 0.4.0+7
+version: 0.4.1+8
 environment:
   sdk: ^3.10.0
 dependencies:
@@ -13,6 +13,7 @@ dependencies:
   file_picker: 10.3.10
   path_provider: ^2.1.6
   path: ^1.9.1
+  package_info_plus: 9.0.1
   url_launcher: ^6.3.3
   window_manager: ^0.5.2
   ffmpeg_kit_flutter_new: ^4.6.7
