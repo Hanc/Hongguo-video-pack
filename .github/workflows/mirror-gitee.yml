@@ -60,4 +60,9 @@ jobs:
           GITEE_REPOSITORY: ${{ vars.GITEE_REPOSITORY }}
           RELEASE_TAG: ${{ inputs.tag }}
         shell: bash
-        run: python -u scripts/gitee-sync.py release "$RELEASE_TAG" mirror-dist
+        run: |
+          if command -v python3 >/dev/null 2>&1; then
+            python3 -u scripts/gitee-sync.py release "$RELEASE_TAG" mirror-dist
+          else
+            python -u scripts/gitee-sync.py release "$RELEASE_TAG" mirror-dist
+          fi
