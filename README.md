@@ -55,6 +55,8 @@ pwsh.exe -NoLogo -NoProfile -File scripts/package.ps1
 
 `prepare-signing.ps1` 仅在首次构建生成本地发布密钥，不覆盖现有密钥。**私下备份 `.local/signing/` 和 `android/key.properties`，不要提交或随安装包分发。** 后续 Android 升级需使用同一密钥。
 
+迭代期不要每次都重建 APK 与安装包：各步骤实测耗时、按改动类型该跑哪些检查、以及已知工具坑，见 [docs/dev-loop.md](docs/dev-loop.md)。
+
 联网协议检查（会实际请求示例剧集）：
 
 ```powershell
