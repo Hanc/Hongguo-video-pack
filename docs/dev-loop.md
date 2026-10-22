@@ -9,12 +9,15 @@
 | 静态检查 | `dev.ps1` 里的 `dart analyze` | 8–15 秒 |
 | 单元/组件测试（65 项） | `flutter test --no-pub` | 15 秒 |
 | 单个测试文件 | `flutter test --no-pub test/x_test.dart` | 6–10 秒 |
-| Windows Release 构建 | `flutter build windows --release --no-pub` | 43–45 秒 |
+| 本地验收（不联网） | `dev.ps1 accept -Arg switch` | 4.7 秒 |
+| Windows Release 构建 | `flutter build windows --release --no-pub` | 43–45 秒（全量）/ 17 秒（无改动增量） |
 | Android arm64 Release | `flutter build apk` | 55 秒（改过 Dart）/ 13 秒（无改动）/ 首次或清缓存后 3–4 分钟 |
-| Inno Setup 安装包 | `compile-iss.ps1`（lzma2 压 110MB） | 61 秒 |
-| 便携 zip + 源码包 + APK 拷贝 | `pack-portable.ps1` | 20–25 秒 |
+| Inno Setup 安装包 | `compile-iss.ps1`（lzma2 压 110MB） | 61–63 秒 |
+| 便携 zip + 源码包 + APK 拷贝 + 校验 | `pack-portable.ps1` | 24–29 秒 |
 
-结论：**迭代期最贵的是安装包（61 秒）与第一次 APK 构建**，而且这两样在改手势、改文案时根本不需要。一次「改点交互 → 构建 release → 跑本地验收」的往返约 60 秒；把 APK 和安装包也带上就变成 2–3 分钟，发版时才值得。
+一次发版实测合计（`dev.ps1 release`，Windows 构建与 APK 并行）：17 + 28 + 63 + 29 ≈ **2 分 20 秒**。
+
+结论：**迭代期最贵的是安装包（63 秒）与第一次 APK 构建**，而且这两样在改手势、改文案时根本不需要。一次「改点交互 → 构建 release → 跑本地验收」的往返约 65 秒；把 APK 和安装包也带上就变成 2 分多，发版时才值得。
 
 ## 一次改动该跑什么
 
