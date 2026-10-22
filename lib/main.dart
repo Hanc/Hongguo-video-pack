@@ -73,7 +73,11 @@ Future<void> main(List<String> arguments) async {
         await runNativeSmokeCheck();
       }
       exit(0);
-    } catch (_) {
+    } catch (error, stack) {
+      // 验收失败时必须把原因和栈留在 stderr：静默 exit(1) 会让「无法创建文件」
+      // 这类根因完全不可见。
+      stderr.writeln('acceptance failed: $error');
+      stderr.writeln(stack.toString());
       exit(1);
     }
   }
@@ -186,7 +190,7 @@ class _StudioHomeState extends State<StudioHome> {
           if (!started) {
             started = true;
             WidgetsBinding.instance.addPostFrameCallback((_) async {
-              final checker = SourceHealthChecker(version: '0.8.0');
+              final checker = SourceHealthChecker(version: '0.8.1');
               try {
                 final result = await checker.run(
                   onProgress: (done, _, name) {
@@ -771,7 +775,7 @@ class _StudioHomeState extends State<StudioHome> {
                                     onPressed: () => showAboutDialog(
                                       context: context,
                                       applicationName: '红葡萄',
-                                      applicationVersion: '0.8.0',
+                                      applicationVersion: '0.8.1',
                                       applicationLegalese:
                                           '访客来源 · 本地制作\n包含 GPL-3.0 协议适配与 FFmpeg 组件。源码与第三方声明随交付包提供。',
                                       children: [
@@ -810,7 +814,7 @@ class _StudioHomeState extends State<StudioHome> {
                                       ],
                                     ),
                                     child: const Text(
-                                      '红葡萄 · v0.8.0 · 关于与许可',
+                                      '红葡萄 · v0.8.1 · 关于与许可',
                                       style: TextStyle(
                                         fontSize: 11,
                                         color: muted,

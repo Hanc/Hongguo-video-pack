@@ -45,8 +45,12 @@ class _PlaybackScreenState extends State<PlaybackScreen>
   bool choosing = false, preparing = false;
   bool _showInfo = false;
   bool _fullscreen = false;
+
+  /// 控制栏是否可见。用 ValueNotifier 单独驱动，避免整页重建。
+  final _chromeShown = ValueNotifier<bool>(true);
+  Timer? _chromeTimer;
+  StreamSubscription<bool>? _playingSub;
   StreamSubscription<VideoParams>? _videoParams;
-  static const _platform = MethodChannel('dev.hongguo.studio/platform');
 
   /// 倍速属于播放器自身能力，放进控制栏，不占用页面布局。
   Widget _speedButton() => AnimatedBuilder(
@@ -57,13 +61,10 @@ class _PlaybackScreenState extends State<PlaybackScreen>
     ),
   );
 
-  MaterialVideoControlsThemeData _controlsTheme({bool fullscreen = false}) =>
+  /// 进度条样式：默认只有 2.4 像素厚，几乎看不见。这里加粗、贴到底边，
+  /// 并把可点击区域和滑块一起放大，方便拖动。
+  MaterialVideoControlsThemeData _controlsTheme() =>
       MaterialVideoControlsThemeData(
-        volumeGesture: !fullscreen,
-        brightnessGesture: !fullscreen,
-        seekGesture: !fullscreen,
-        // 默认进度条只有 2.4 像素厚，几乎看不见。这里加粗、贴到底边，
-        // 并把可点击区域和滑块一起放大，方便拖动。
         seekBarHeight: 8,
         seekBarContainerHeight: 30,
         seekBarThumbSize: 15,
@@ -73,21 +74,6 @@ class _PlaybackScreenState extends State<PlaybackScreen>
         seekBarColor: Colors.white12,
         seekBarMargin: EdgeInsets.zero,
         seekBarAlignment: Alignment.bottomCenter,
-        // 全屏时左上角提供明确的退出入口，不必再去右下角找切换按钮。
-        topButtonBar: fullscreen ? [_fullscreenBackButton()] : const [],
-        bottomButtonBar: [
-          const MaterialPositionIndicator(),
-          const Spacer(),
-          IconButton(
-            tooltip: '播放信息 (I)',
-            iconSize: 20,
-            color: Colors.white,
-            onPressed: () => _setInfo(!_showInfo),
-            icon: const Icon(Icons.info_outline_rounded),
-          ),
-          _speedButton(),
-          const MaterialFullscreenButton(),
-        ],
       );
 
   /// 全屏路由里的返回按钮。
@@ -97,62 +83,170 @@ class _PlaybackScreenState extends State<PlaybackScreen>
   /// 直接用它会让 `isFullscreen` 永远为 false。
   Widget _fullscreenBackButton() => const FullscreenBackButton();
 
+  // ── 自绘控制层 ──────────────────────────────────────────────────────────
+  // 不用 media_kit 的 MaterialVideoControls：它把 toggle 挂在 Listener 的
+  // onPointerDown 上，长按加速 400ms 时会先弹出一整层遮罩；而且那一层始终
+  // 参与命中测试，会抢走手势层的手指事件。这里改成"手势层铺满整块画面 +
+  // 控制栏只占上下两条、可见时才接收点击"，长按就只会加速。
   Widget _controls(VideoState state) => Builder(
     builder: (context) {
       // 全屏是 media_kit push 的独立路由，只有这里能拿到准确的 isFullscreen。
       final fullscreen = isFullscreen(context);
-      final themed = MaterialVideoControlsTheme(
-        normal: _controlsTheme(),
-        fullscreen: _controlsTheme(fullscreen: true),
-        child: MaterialVideoControls(state),
-      );
-      if (desktop) return themed;
-      // 竖屏短剧全屏后仍然是竖屏，此时同样需要手势。
-      if (!fullscreen) return themed;
-      final player = _native!.player;
-      return PlaybackGestures(
-        position: () => player.state.position,
-        duration: () => player.state.duration,
-        seek: player.seek,
-        onTogglePlay: () => unawaited(_togglePlay()),
-        // 长按左右两侧临时顶到最高倍速，松手回落到用户选择的档位。
-        onBoostStart: () {
-          final applied = c.startBoost();
-          return applied
-              ? '${PlaybackController.speedLabel(c.effectiveRate)} 加速中'
-              : '已是最高倍速';
-        },
-        onBoostEnd: c.endBoost,
-        changeEpisode: (step) {
-          final next = c.index + step;
-          if (!c.loading &&
-              next >= 0 &&
-              next < (c.drama?.episodes.length ?? 0)) {
-            unawaited(c.play(next));
-          }
-        },
-        levels: () async {
-          final values = await _platform.invokeMapMethod<String, dynamic>(
-            'playbackLevels',
-          );
-          return (
-            (values?['brightness'] as num?)?.toDouble() ?? .5,
-            (values?['volume'] as num?)?.toDouble() ?? .5,
-          );
-        },
-        setLevel: (light, value) => _platform.invokeMethod<void>(
-          light ? 'playbackBrightness' : 'playbackVolume',
-          {'value': value},
+      final player = _native?.player;
+      return MouseRegion(
+        // 桌面端鼠标划过就浮出控制栏，离开后计时收起。
+        onEnter: desktop ? (_) => _revealChrome() : null,
+        onHover: desktop ? (_) => _revealChrome() : null,
+        onExit: desktop ? (_) => _armChromeTimer() : null,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (player != null)
+              PlaybackGestures(
+                position: () => player.state.position,
+                duration: () => player.state.duration,
+                seek: player.seek,
+                onTap: _toggleChrome,
+                onTogglePlay: () => unawaited(_togglePlay()),
+                // 长按临时顶到最高倍速，松手回落到用户选择的档位。
+                onBoostStart: () {
+                  _hideChrome();
+                  final applied = c.startBoost();
+                  return applied
+                      ? '${PlaybackController.speedLabel(c.effectiveRate)} 加速中'
+                      : '已是最高倍速';
+                },
+                onBoostEnd: c.endBoost,
+                // 上下滑切上一集/下一集。
+                changeEpisode: (step) {
+                  final next = c.index + step;
+                  if (!c.loading &&
+                      next >= 0 &&
+                      next < (c.drama?.episodes.length ?? 0)) {
+                    unawaited(c.play(next));
+                  }
+                },
+                child: const SizedBox.expand(),
+              ),
+            ValueListenableBuilder<bool>(
+              valueListenable: _chromeShown,
+              builder: (context, shown, _) => IgnorePointer(
+                ignoring: !shown,
+                child: AnimatedOpacity(
+                  opacity: shown ? 1 : 0,
+                  duration: const Duration(milliseconds: 160),
+                  child: Listener(
+                    // 任何一次按下都重新计时，拖进度条时不会中途收起。
+                    onPointerDown: (_) => _armChromeTimer(),
+                    child: _chromeBar(fullscreen),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
-        onDispose: () => unawaited(
-          _platform
-              .invokeMethod<void>('resetPlaybackBrightness')
-              .catchError((Object _) {}),
-        ),
-        child: themed,
       );
     },
   );
+
+  /// 控制栏只占顶部返回键和底部一条，中间大片区域保持可穿透。
+  Widget _chromeBar(bool fullscreen) => Stack(
+    children: [
+      if (fullscreen)
+        Positioned(
+          top: 6,
+          left: 6,
+          child: DecoratedBox(
+            decoration: const BoxDecoration(
+              color: Colors.black45,
+              shape: BoxShape.circle,
+            ),
+            child: _fullscreenBackButton(),
+          ),
+        ),
+      Positioned(
+        left: 0,
+        right: 0,
+        bottom: 0,
+        child: DecoratedBox(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.bottomCenter,
+              end: Alignment.topCenter,
+              colors: [Colors.black54, Colors.transparent],
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 28, 10, 2),
+            child: MaterialVideoControlsTheme(
+              normal: _controlsTheme(),
+              fullscreen: _controlsTheme(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      const MaterialPlayOrPauseButton(),
+                      const SizedBox(width: 6),
+                      const MaterialPositionIndicator(),
+                      const Spacer(),
+                      IconButton(
+                        tooltip: '播放信息 (I)',
+                        iconSize: 20,
+                        color: Colors.white,
+                        onPressed: () => _setInfo(!_showInfo),
+                        icon: const Icon(Icons.info_outline_rounded),
+                      ),
+                      _speedButton(),
+                      const MaterialFullscreenButton(),
+                    ],
+                  ),
+                  const MaterialSeekBar(),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+
+  /// 浮出控制栏（鼠标划过时用，不启动隐藏计时）。
+  void _revealChrome() {
+    if (!_chromeShown.value) _chromeShown.value = true;
+  }
+
+  /// 浮出控制栏并开始计时（点击时用）。
+  void _showChrome() {
+    _revealChrome();
+    _armChromeTimer();
+  }
+
+  void _toggleChrome() {
+    if (_chromeShown.value) {
+      _hideChrome();
+    } else {
+      _showChrome();
+    }
+  }
+
+  void _hideChrome() {
+    _chromeTimer?.cancel();
+    _chromeTimer = null;
+    if (_chromeShown.value) _chromeShown.value = false;
+  }
+
+  /// 只在播放中自动收起；暂停时控制栏常驻，方便继续操作。
+  void _armChromeTimer() {
+    _chromeTimer?.cancel();
+    _chromeTimer = null;
+    if (!_chromeShown.value) return;
+    if (!(_native?.player.state.playing ?? false)) return;
+    // 与 media_kit 内置控制栏一致：播放中 3 秒后自动收起。
+    _chromeTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) _hideChrome();
+    });
+  }
   int episodePage = 0;
   bool get desktop => {
     TargetPlatform.windows,
@@ -172,6 +266,10 @@ class _PlaybackScreenState extends State<PlaybackScreen>
     // 全屏状态下切到不同比例的剧集时，方向要跟着内容走。
     _videoParams = _native?.player.stream.videoParams.listen((_) {
       if (_fullscreen) unawaited(_applyOrientation(true));
+    });
+    // 开播 3 秒后自动收起控制栏；暂停时保持常驻。
+    _playingSub = _native?.player.stream.playing.listen((playing) {
+      if (playing && mounted) _armChromeTimer();
     });
     c =
         widget.controller ??
@@ -226,7 +324,10 @@ class _PlaybackScreenState extends State<PlaybackScreen>
     HardwareKeyboard.instance.removeHandler(_onKeyEvent);
     WidgetsBinding.instance.removeObserver(this);
     _infoTimer?.cancel();
+    _chromeTimer?.cancel();
     unawaited(_videoParams?.cancel());
+    unawaited(_playingSub?.cancel());
+    _chromeShown.dispose();
     // 离开播放页时不能把设备锁在横屏。
     if (_fullscreen) unawaited(_applyOrientation(false));
     if (widget.controller == null) c.dispose();

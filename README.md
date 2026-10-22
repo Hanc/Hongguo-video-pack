@@ -73,6 +73,10 @@ Windows Release 整体检查：在项目根目录运行 `build/windows/x64/runne
 
 `--switch-acceptance` 用内置引擎生成的本地样片验证连播双通道与倍速：预加载不打断当前播放、切换只交换通道、切换后保持倍速。不依赖来源网络与签名，结果写入 `.local/switch-acceptance/result.json`。
 
+本地跑上述任一流程建议用 `scripts/run-local-acceptance.ps1 -Mode switch|playback|fullscreen|search|smoke`：它把 `TEMP`/`TMP` 指到仓库内 `.local/tmp` 再启动成品程序。原因是 `media_kit` 截图走 `Directory.systemTemp`，`%TEMP%` 不可写时会以 `Cannot create file ... errno = 5` 直接退出；2026-10-22 起该失败也会把原因与栈打到 stderr（此前是静默 `exit(1)`）。
+
+播放页手势与控件映射见 [docs/player-interaction.md](docs/player-interaction.md)。
+
 GitHub Actions 自动构建/Release 流程及首次签名 Secrets 配置见 [docs/releasing.md](docs/releasing.md)；透明图标母版及导出说明见 [docs/branding.md](docs/branding.md)。
 
 桌面发布必须提供安装程序：Windows 为 Setup.exe；Linux / macOS 后续接入时也应提供对应系统安装格式。目前尚未交付 Linux / macOS 构建，不能把 Windows 包当作这些系统的安装包。
