@@ -95,6 +95,43 @@ void main() {
     await expectLater(client.search('测试', page: 4), throwsStateError);
   });
 
+  test('related search keeps the first batch and offers no pager', () async {
+    final client = DiscoveryClient(
+      client: MockClient((req) async {
+        expect(req.url.path, '/api/search/result');
+        return http.Response(
+          jsonEncode({
+            'searchList': [
+              {
+                'video_data': {'series_id': '1', 'series_title': '重生：第一季'},
+              },
+              {
+                'video_data': {'series_id': '2', 'series_title': '重生：第二季'},
+              },
+              {
+                'video_data': {'series_id': '3', 'series_title': '别的剧'},
+              },
+            ],
+            'totalCount': '213',
+            'pageNum': 1,
+            'totalPages': 22,
+            'hasMore': true,
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(client.close);
+    final page = await client.search('重生', relatedTo: '1');
+    expect(page.items.map((d) => d.id), ['2']);
+    expect(page.pages, 1);
+    expect(page.hasMore, isFalse);
+    expect(page.canExpand, isFalse);
+    expect(page.total, 1);
+    expect(page.sourceTotal, 213);
+  });
+
   test('search publishes results without waiting for missing heat', () async {
     final details = Completer<http.Response>();
     final client = DiscoveryClient(

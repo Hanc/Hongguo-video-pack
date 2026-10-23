@@ -292,14 +292,17 @@ class DiscoveryClient {
       // Preserve the source ranking. No catalogue scan or metric requests on
       // this critical path; publish results as soon as this one request returns.
       final totalPages = integer(data['totalPages']).clamp(1, 500);
+      // 「相关推荐」是按标题过滤同名前缀，只取首批：给它翻页只会翻到空的，
+      // 所以只在真正的关键词搜索里暴露后页。
+      final paged = relatedTo == null;
       return DiscoveryPage(
         rows,
         page: page,
-        pages: totalPages,
-        total: integer(data['totalCount']),
+        pages: paged ? totalPages : 1,
+        total: paged ? integer(data['totalCount']) : rows.length,
         sourceTotal: integer(data['totalCount']),
-        canExpand: true,
-        scope: '红果网页搜索 · 第 $page / $totalPages 页',
+        canExpand: paged,
+        scope: paged ? '红果网页搜索 · 第 $page / $totalPages 页' : '红果网页搜索 · 相关推荐首批',
       );
     }
     var matches = _searches[key] ?? <DramaSummary>[];
