@@ -38,25 +38,26 @@ void main() {
             detailCalls++;
             return pending.future;
           }
+          expect(request.url.path, '/api/search/result');
           return http.Response(
-            '<script>window._ROUTER_DATA=${jsonEncode({
-              'loaderData': {
-                'search_page': {
-                  'isSuccess': true,
-                  'query': '重生',
-                  'searchList': [
-                    {
-                      'series_id': '101',
-                      'series_title': '重生',
-                      'series_cover': 'https://example.com/cover.heic?signature=unchanged',
-                      'hot_score_data': {'text': '4702万热度'},
-                    },
-                  ],
+            jsonEncode({
+              'searchList': [
+                {
+                  'video_data': {
+                    'series_id': '101',
+                    'series_title': '重生',
+                    'series_cover': 'https://example.com/cover.heic?signature=unchanged',
+                    'hot_score_data': {'text': '4702万热度'},
+                  },
                 },
-              },
-            })}</script>',
+              ],
+              'totalCount': '1',
+              'pageNum': 1,
+              'totalPages': 1,
+              'hasMore': false,
+            }),
             200,
-            headers: {'content-type': 'text/html; charset=utf-8'},
+            headers: {'content-type': 'application/json; charset=utf-8'},
           );
         }),
       );

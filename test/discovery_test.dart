@@ -18,33 +18,40 @@ http.Response pageResponse(String route, Map<String, dynamic> page) =>
 
 void main() {
   test(
-    'default search makes one web request and never scans the catalogue',
+    'default search reads the search API once and never scans the catalogue',
     () async {
       final paths = <String>[];
       final client = DiscoveryClient(
         client: MockClient((req) async {
           paths.add(Uri.decodeComponent(req.url.path));
-          expect(Uri.decodeComponent(req.url.path), '/search/持械入宋');
-          return pageResponse('search_(keyword)/page', {
-            'isSuccess': true,
-            'query': '持械入宋',
-            'totalCount': 195,
-            'searchList': [
-              {
-                'video_data': {
-                  'series_id': '123',
-                  'series_title': '持械入宋：第一季',
-                  'hot_score_data': {'text': '5362万热度'},
+          expect(req.url.path, '/api/search/result');
+          expect(req.url.queryParameters['query'], '持械入宋');
+          return http.Response(
+            jsonEncode({
+              'searchList': [
+                {
+                  'video_data': {
+                    'series_id': '123',
+                    'series_title': '持械入宋：第一季',
+                    'hot_score_data': {'text': '5362万热度'},
+                  },
                 },
-              },
-            ],
-          });
+              ],
+              'totalCount': '195',
+              'pageNum': 1,
+              'totalPages': 1,
+              'hasMore': false,
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
         }),
       );
       addTearDown(client.close);
       final page = await client.search('持械入宋');
-      expect(paths, ['/search/持械入宋']);
+      expect(paths, ['/api/search/result']);
       expect(page.items.single.metric, '5362万热度');
+      expect(page.total, 195);
       expect(page.sourceTotal, 195);
       expect(page.canExpand, isTrue);
       expect(page.hasMore, isFalse);
@@ -52,20 +59,62 @@ void main() {
     },
   );
 
+  test('search reads later pages from the API cursor', () async {
+    final pages = <String>[];
+    final client = DiscoveryClient(
+      client: MockClient((req) async {
+        final page = int.parse(req.url.queryParameters['page']!);
+        pages.add('$page');
+        return http.Response(
+          jsonEncode({
+            'searchList': [
+              {
+                'video_data': {
+                  'series_id': '90$page',
+                  'series_title': '第$page页剧',
+                },
+              },
+            ],
+            'totalCount': '42',
+            'pageNum': page,
+            'totalPages': 3,
+            'hasMore': page < 3,
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }),
+    );
+    addTearDown(client.close);
+    final second = await client.search('测试', page: 2);
+    expect(pages, ['2']);
+    expect(second.items.single.title, '第2页剧');
+    expect(second.page, 2);
+    expect(second.pages, 3);
+    expect(second.hasMore, isTrue);
+    await expectLater(client.search('测试', page: 4), throwsStateError);
+  });
+
   test('search publishes results without waiting for missing heat', () async {
     final details = Completer<http.Response>();
     final client = DiscoveryClient(
       client: MockClient((req) async {
         if (req.url.path == '/detail') return details.future;
-        expect(Uri.decodeComponent(req.url.path), '/search/测试');
-        return pageResponse('search_(keyword)/page', {
-          'isSuccess': true,
-          'query': '测试',
-          'totalCount': 1,
-          'searchList': [
-            {'series_id': '123', 'series_name': '测试'},
-          ],
-        });
+        expect(req.url.path, '/api/search/result');
+        expect(req.url.queryParameters['query'], '测试');
+        return http.Response(
+          jsonEncode({
+            'searchList': [
+              {'series_id': '123', 'series_name': '测试'},
+            ],
+            'totalCount': '1',
+            'pageNum': 1,
+            'totalPages': 1,
+            'hasMore': false,
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
       }),
     );
     final c = DiscoveryController(client: client);

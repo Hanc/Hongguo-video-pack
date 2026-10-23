@@ -190,7 +190,7 @@ class _StudioHomeState extends State<StudioHome> {
           if (!started) {
             started = true;
             WidgetsBinding.instance.addPostFrameCallback((_) async {
-              final checker = SourceHealthChecker(version: '0.8.1');
+              final checker = SourceHealthChecker(version: '0.8.2');
               try {
                 final result = await checker.run(
                   onProgress: (done, _, name) {
@@ -775,7 +775,7 @@ class _StudioHomeState extends State<StudioHome> {
                                     onPressed: () => showAboutDialog(
                                       context: context,
                                       applicationName: '红葡萄',
-                                      applicationVersion: '0.8.1',
+                                      applicationVersion: '0.8.2',
                                       applicationLegalese:
                                           '访客来源 · 本地制作\n包含 GPL-3.0 协议适配与 FFmpeg 组件。源码与第三方声明随交付包提供。',
                                       children: [
@@ -814,7 +814,7 @@ class _StudioHomeState extends State<StudioHome> {
                                       ],
                                     ),
                                     child: const Text(
-                                      '红葡萄 · v0.8.1 · 关于与许可',
+                                      '红葡萄 · v0.8.2 · 关于与许可',
                                       style: TextStyle(
                                         fontSize: 11,
                                         color: muted,

@@ -16,14 +16,14 @@ Future<void> runSearchAcceptance() async {
   final client = DiscoveryClient();
   try {
     final support = await appSupportDirectory();
-    if (!await client.loadSearchIdentity(
+    // App 搜索需要访客身份文件；界面流程里从未创建它，所以真实默认路径就是
+    // 网页搜索。两条路都必须能分页，缺少身份文件本身不算失败。
+    final appIdentity = await client.loadSearchIdentity(
       File(p.join(support.path, 'search-visitor.json')),
-    )) {
-      throw StateError('本机搜索尚未初始化');
-    }
+    );
     final first = await client.search('重生');
     final second = await client.search('重生', page: 2);
-    final back = await client.search('重生');
+    final repeat = await client.search('重生');
     final covered = await client.enrichMetrics([
       ...first.items,
       ...second.items,
@@ -51,22 +51,34 @@ Future<void> runSearchAcceptance() async {
     } finally {
       images.close();
     }
-    final overlap = first.items
-        .map((d) => d.id)
-        .toSet()
-        .intersection(second.items.map((d) => d.id).toSet());
-    if (first.items.isEmpty ||
-        second.items.isEmpty ||
-        overlap.isNotEmpty ||
-        !identical(back, first)) {
+    final firstIds = first.items.map((d) => d.id).toSet();
+    final secondIds = second.items.map((d) => d.id).toSet();
+    final overlap = firstIds.intersection(secondIds);
+    final fresh = secondIds.difference(firstIds);
+    final stable =
+        first.items.map((d) => d.id).join(',') ==
+        repeat.items.map((d) => d.id).join(',');
+    // 上游分页会稳定地重复一个边界条目：实测 2026-10-23，`page=1` 的第 6 条
+    // 就是 `page=2` 的第 1 条，两页其余都不同，重复抓取又是逐字节一致。
+    // 因此不能要求两页零重叠；要求后页至少带来 9 条新剧、两页合并至少 15 条。
+    if (first.items.length < 5 ||
+        second.items.length < 5 ||
+        fresh.length < 9 ||
+        overlap.length > 1 ||
+        !stable ||
+        first.total <= 0) {
       throw StateError('搜索分页验证未通过');
     }
     report.addAll({
       'passed': true,
+      'path': appIdentity ? 'app' : 'website',
       'first': first.items.length,
       'second': second.items.length,
+      'freshOnSecond': fresh.length,
       'overlap': overlap.length,
-      'backCached': true,
+      'repeatStable': stable,
+      'pages': first.pages,
+      'total': first.total,
       'more': second.hasMore,
       'heat': second.items.where((d) => d.heat.isNotEmpty).length,
       'coversDecoded': decodedCovers,

@@ -274,14 +274,10 @@ class DiscoveryClient {
       if (appSearch != null && relatedTo == null) {
         return appSearch!.search(keyword, page: page, refresh: refresh);
       }
-      if (page != 1) throw StateError('网页未提供有效的搜索后页，请选择补充检索');
-      final html = await _get('/search/$keyword');
-      final data = routerPage(html, 'search_');
-      if (data['isSuccess'] != true ||
-          data['query'] != keyword ||
-          data['searchList'] is! List) {
-        throw const FormatException('搜索数据格式已变化，请稍后重试');
-      }
+      // 网站的 /search/<关键词> 页面已改成前端渲染，返回的 HTML 里不再有
+      // _ROUTER_DATA，只能拿脚本外壳；数据改由首页脚本同样调用的
+      // /api/search/result 提供（query + page，每页 10 条）。
+      final data = await _searchApi(keyword, page);
       var rows = parseSummaries(data['searchList']);
       if (relatedTo != null) {
         rows = rows
@@ -295,12 +291,15 @@ class DiscoveryClient {
       }
       // Preserve the source ranking. No catalogue scan or metric requests on
       // this critical path; publish results as soon as this one request returns.
+      final totalPages = integer(data['totalPages']).clamp(1, 500);
       return DiscoveryPage(
         rows,
-        total: rows.length,
+        page: page,
+        pages: totalPages,
+        total: integer(data['totalCount']),
         sourceTotal: integer(data['totalCount']),
         canExpand: true,
-        scope: '红果网页搜索首批结果；网页未提供有效后页。',
+        scope: '红果网页搜索 · 第 $page / $totalPages 页',
       );
     }
     var matches = _searches[key] ?? <DramaSummary>[];
@@ -310,17 +309,13 @@ class DiscoveryClient {
       final needle = _title(keyword);
       matches = indexed.where((d) => _title(d.title).contains(needle)).toList();
       // Supplement the indexed catalogue with the website's first search batch.
-      // Never use its reported total as a page count: ?page=2 repeats page 1.
       try {
-        final html = await _get('/search/$keyword');
-        final data = routerPage(html, 'search_');
-        if (data['isSuccess'] == true && data['query'] == keyword) {
-          final merged = {for (final d in matches) d.id: d};
-          for (final d in parseSummaries(data['searchList'])) {
-            if (_title(d.title).contains(needle)) merged[d.id] = d;
-          }
-          matches = merged.values.toList();
+        final data = await _searchApi(keyword, 1);
+        final merged = {for (final d in matches) d.id: d};
+        for (final d in parseSummaries(data['searchList'])) {
+          if (_title(d.title).contains(needle)) merged[d.id] = d;
         }
+        matches = merged.values.toList();
       } catch (_) {
         /* Catalogue results remain complete within their stated scope. */
       }
@@ -366,6 +361,33 @@ class DiscoveryClient {
 
   String _title(String value) =>
       value.toLowerCase().replaceAll(RegExp(r'[\s：:，,。.!！?？·《》、（）()\-]'), '');
+
+  /// 网站搜索页改成前端渲染后，`/search/<关键词>` 只剩脚本外壳，
+  /// 搜索结果由 `/api/search/result?query=…&page=…` 直接给出 JSON
+  /// （每页 10 条，返回 totalCount/totalPages/hasMore）。
+  Future<Json> _searchApi(String keyword, int page) async {
+    final body = await _get('/api/search/result', {
+      'query': keyword,
+      'page': '$page',
+    }, false);
+    Json data;
+    try {
+      data = object(jsonDecode(body));
+    } catch (_) {
+      throw const FormatException('搜索数据格式已变化，请稍后重试');
+    }
+    if (data['searchList'] is! List) {
+      throw const FormatException('搜索数据格式已变化，请稍后重试');
+    }
+    final totalPages = integer(data['totalPages']);
+    if (totalPages > 0 && page > totalPages) {
+      throw StateError('没有更多搜索结果');
+    }
+    if (page > 1 && integer(data['pageNum']) != page) {
+      throw const FormatException('搜索分页不匹配，请重新搜索');
+    }
+    return data;
+  }
 
   Future<List<DramaSummary>> enrichMetrics(
     List<DramaSummary> rows, {
