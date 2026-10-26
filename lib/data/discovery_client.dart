@@ -61,6 +61,7 @@ class DiscoveryClient {
   Future<List<DramaSummary>>? _index;
   DateTime? _indexTime;
   final _searches = <String, List<DramaSummary>>{};
+  final _webSessions = <String, Map<int, Set<String>>>{};
   final _details = <String, Future<Json?>>{};
 
   Future<List<DramaSummary>> _catalogue() async {
@@ -152,7 +153,7 @@ class DiscoveryClient {
     int page = 1,
     String? relatedTo,
     bool expanded = false,
-    bool refresh = false,
+    bool refresh = true,
   }) async {
     keyword = keyword.trim();
     if (keyword.isEmpty ||
@@ -167,15 +168,60 @@ class DiscoveryClient {
       if (appSearch != null && relatedTo == null) {
         return appSearch!.search(keyword, page: page, refresh: refresh);
       }
-      if (page != 1) throw StateError('网页未提供有效的搜索后页，请选择补充检索');
-      final html = await _get('/search/$keyword');
-      final data = routerPage(html, 'search_');
-      if (data['isSuccess'] != true ||
-          data['query'] != keyword ||
-          data['searchList'] is! List) {
+      if (page == 1 && refresh) _webSessions.remove(key);
+      if (_webSessions.length >= 16 && !_webSessions.containsKey(key)) {
+        _webSessions.remove(_webSessions.keys.first);
+      }
+      final session = _webSessions.putIfAbsent(key, () => {});
+      final response = await _http
+          .get(
+            Uri.https('hongguoduanju.com', '/api/search/result', {
+              'aid': '8662',
+              'query': keyword,
+              if (page > 1) 'page': '$page',
+            }),
+            headers: const {
+              'Accept': 'application/json',
+              'User-Agent': 'Mozilla/5.0',
+              'Referer': 'https://hongguoduanju.com/',
+              'Cache-Control': 'no-cache',
+            },
+          )
+          .timeout(const Duration(seconds: 25));
+      if (response.statusCode == 403) {
+        throw StateError('搜索暂时需要来源验证，请稍后重试。');
+      }
+      if (response.statusCode != 200) {
+        throw StateError('搜索暂不可用（HTTP ${response.statusCode}），请重试。');
+      }
+      final data = object(jsonDecode(utf8.decode(response.bodyBytes)));
+      if (data['searchList'] is! List ||
+          integer(data['pageNum']) != page ||
+          integer(data['totalPages']) < 0) {
         throw const FormatException('搜索数据格式已变化，请稍后重试');
       }
-      var rows = parseSummaries(data['searchList']);
+      var rows = parseSummaries(
+        (data['searchList'] as List)
+            .where(
+              (row) =>
+                  object(row)['video_data'] is Map ||
+                  object(row)['series_id'] != null,
+            )
+            .toList(),
+      );
+      if (!identical(_webSessions[key], session)) {
+        throw StateError('搜索已被新请求替代');
+      }
+      final preceding = {
+        for (final entry in session.entries)
+          if (entry.key < page) ...entry.value,
+      };
+      final fresh = rows.where((row) => !preceding.contains(row.id)).toList();
+      if (rows.isNotEmpty && fresh.isEmpty) {
+        throw StateError('来源重复返回相同结果，请重新搜索。');
+      }
+      session[page] = rows.map((row) => row.id).toSet();
+      rows = fresh;
       if (relatedTo != null) {
         rows = rows
             .where(
@@ -190,10 +236,11 @@ class DiscoveryClient {
       // this critical path; publish results as soon as this one request returns.
       return DiscoveryPage(
         rows,
-        total: rows.length,
+        page: page,
+        pages: integer(data['totalPages']).clamp(page, 500),
+        total: integer(data['totalCount']),
         sourceTotal: integer(data['totalCount']),
-        canExpand: true,
-        scope: '红果网页搜索首批结果；网页未提供有效后页。',
+        scope: '红果官网搜索',
       );
     }
     var matches = _searches[key] ?? <DramaSummary>[];
@@ -325,6 +372,51 @@ class DiscoveryClient {
     } catch (_) {
       return null;
     }
+  }
+
+  Future<List<DramaSummary>> recommendations(String id) async {
+    if (!RegExp(r'^\d{1,32}$').hasMatch(id)) {
+      throw const FormatException('剧集 ID 无效');
+    }
+    final html = await _get('/detail', {'series_id': id});
+    final page = routerPage(html, 'detail_page');
+    final detail = object(page['seriesDetail']);
+    if (text(detail['series_id_str'] ?? detail['series_id']) != id) {
+      throw const FormatException('相关剧集来源不匹配');
+    }
+    for (final tag in RegExp(
+      r'<script\b[^>]*>',
+      caseSensitive: false,
+    ).allMatches(html)) {
+      final attr = RegExp(r'data-fn-args="([^"]+)"').firstMatch(tag.group(0)!);
+      if (attr == null) continue;
+      try {
+        final args = jsonDecode(decodeAttribute(attr[1]!));
+        if (args is! List ||
+            args.length < 2 ||
+            args[0] != 'detail_page' ||
+            args[1] is! List) {
+          continue;
+        }
+        for (final raw in args[1] as List) {
+          final item = object(raw);
+          if (item['key'] != 'recommendations') continue;
+          final values = item['routerDataFnArgs'];
+          if (values is! List || values.isEmpty || values.first is! String) {
+            continue;
+          }
+          final data = object(jsonDecode(values.first as String));
+          final groups = object(data['recommendationGroups']);
+          final rows = groups['related_list'];
+          if (rows is List) {
+            return parseSummaries(rows).where((row) => row.id != id).toList();
+          }
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    return [];
   }
 
   Future<DiscoveryPage> ranking(String board, {int page = 1}) async {

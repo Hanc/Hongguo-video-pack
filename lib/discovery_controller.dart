@@ -48,6 +48,12 @@ class DiscoveryController extends ChangeNotifier {
     final token = ++_request;
     final requestedMode = mode;
     final requestedCategory = category;
+    final requestedQuery = query;
+    if (!more &&
+        {DiscoveryMode.search, DiscoveryMode.related}.contains(requestedMode)) {
+      items = [];
+      result = null;
+    }
     loading = true;
     error = null;
     indexedCount = 0;
@@ -67,7 +73,7 @@ class DiscoveryController extends ChangeNotifier {
         case DiscoveryMode.search:
         case DiscoveryMode.related:
           data = await client.search(
-            query,
+            requestedQuery,
             page: searchPage ?? 1,
             expanded: expandedSearch,
             refresh: searchPage == null,

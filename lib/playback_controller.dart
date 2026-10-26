@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'data/hongguo_client.dart';
 import 'domain/drama.dart';
+import 'services/episode_preloader.dart';
 
 abstract class PlaybackEngine {
   Stream<bool> get completed;
@@ -13,8 +14,11 @@ abstract class PlaybackEngine {
 }
 
 class PlaybackController extends ChangeNotifier {
-  PlaybackController({required this.engine, HongguoClient? client})
-    : client = client ?? HongguoClient() {
+  PlaybackController({
+    required this.engine,
+    HongguoClient? client,
+    this.preloader,
+  }) : client = client ?? HongguoClient() {
     _completed = engine.completed.listen((done) {
       if (done &&
           autoAdvance &&
@@ -32,6 +36,76 @@ class PlaybackController extends ChangeNotifier {
   }
   final PlaybackEngine engine;
   final HongguoClient client;
+  final EpisodePreloader? preloader;
+  bool preloadNext = true;
+  PreloadedEpisode? _ready, _playingFile;
+  List<MediaVariant>? _readyOptions;
+  int? _readyIndex;
+  String? _preloadAttempt;
+  int _preloadGeneration = 0;
+
+  void setPreloadNext(bool value) {
+    preloadNext = value;
+    if (!value) _cancelPreload();
+    notifyListeners();
+  }
+
+  void suspendPreload() => _cancelPreload();
+
+  void _cancelPreload() {
+    _preloadGeneration++;
+    preloader?.cancel();
+    final old = _ready;
+    _ready = null;
+    _readyOptions = null;
+    _readyIndex = null;
+    if (old != null) unawaited(old.dispose());
+    _preloadAttempt = null;
+  }
+
+  void onProgress(Duration position, Duration duration) {
+    final value = drama;
+    if (_disposed ||
+        loading ||
+        !preloadNext ||
+        preloader == null ||
+        value == null ||
+        duration.inMilliseconds <= 0 ||
+        position.inMilliseconds < duration.inMilliseconds * .8 ||
+        index + 1 >= value.episodes.length) {
+      return;
+    }
+    final key = '${value.id}:$index:$quality';
+    if (_preloadAttempt == key) return;
+    _preloadAttempt = key;
+    unawaited(_preload(value, index + 1, quality, _preloadGeneration));
+  }
+
+  Future<void> _preload(
+    Drama value,
+    int next,
+    int target,
+    int generation,
+  ) async {
+    try {
+      final options = await client.fetchVariants(
+        value.episodes[next],
+        seriesId: value.id,
+      );
+      if (_disposed || generation != _preloadGeneration) return;
+      final cached = await preloader!.load(chooseQuality(options, target));
+      if (_disposed || generation != _preloadGeneration) {
+        await cached?.dispose();
+        return;
+      }
+      _ready = cached;
+      _readyOptions = cached == null ? null : options;
+      _readyIndex = cached == null ? null : next;
+    } catch (_) {
+      /* Playback continues with a fresh stream if preloading fails. */
+    }
+  }
+
   late final StreamSubscription<bool> _completed;
   late final StreamSubscription<String> _errors;
   Drama? drama;
@@ -50,6 +124,7 @@ class PlaybackController extends ChangeNotifier {
     String episodeId = '',
     Duration start = Duration.zero,
   }) async {
+    _cancelPreload();
     final generation = ++_generation;
     loading = true;
     error = null;
@@ -85,22 +160,46 @@ class PlaybackController extends ChangeNotifier {
       return;
     }
     onBeforeChange?.call();
+    final cached = _readyIndex == episodeIndex ? _ready : null;
+    final cachedOptions = cached == null ? null : _readyOptions;
+    if (cached != null) {
+      _ready = null;
+      _readyOptions = null;
+      _readyIndex = null;
+    }
+    _cancelPreload();
     final generation = ++_generation;
     index = episodeIndex;
     loading = true;
     error = null;
     notifyListeners();
     try {
-      final options = await client.fetchVariants(
-        value.episodes[episodeIndex],
-        seriesId: value.id,
-      );
-      if (_disposed || generation != _generation) return;
+      final options =
+          cachedOptions ??
+          await client.fetchVariants(
+            value.episodes[episodeIndex],
+            seriesId: value.id,
+          );
+      if (_disposed || generation != _generation) {
+        await cached?.dispose();
+        return;
+      }
       final media = chooseQuality(options, quality);
       variants = options;
       final next = _openTail.then((_) async {
-        if (_disposed || generation != _generation) return;
-        await engine.open(media, start: start);
+        if (_disposed || generation != _generation) {
+          await cached?.dispose();
+          return;
+        }
+        try {
+          await engine.open(cached?.media ?? media, start: start);
+        } catch (_) {
+          if (cached == null) rethrow;
+          await engine.open(media, start: start);
+        }
+        final previous = _playingFile;
+        _playingFile = cached;
+        await previous?.dispose();
       });
       _openTail = next.catchError((_) {});
       await next;
@@ -108,6 +207,7 @@ class PlaybackController extends ChangeNotifier {
       loading = false;
       notifyListeners();
     } catch (_) {
+      if (!identical(_playingFile, cached)) await cached?.dispose();
       if (_disposed || generation != _generation) return;
       error = '播放准备失败，请重试或切换清晰度。';
       loading = false;
@@ -156,10 +256,16 @@ class PlaybackController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _cancelPreload();
     _generation++;
     unawaited(_completed.cancel());
     unawaited(_errors.cancel());
-    unawaited(_openTail.then((_) => engine.dispose()));
+    unawaited(
+      _openTail.then((_) async {
+        await engine.dispose();
+        await _playingFile?.dispose();
+      }),
+    );
     client.close();
     super.dispose();
   }

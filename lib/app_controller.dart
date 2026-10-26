@@ -26,6 +26,19 @@ class StudioController extends ChangeNotifier {
   final events = <String>[];
   final history = <Map<String, dynamic>>[];
   bool loading = false, busy = false, normalize = true;
+  bool preloadNext = true;
+  Future<Directory> playbackCacheDirectory() async {
+    final store = _store;
+    if (store == null) throw StateError('播放缓存尚未初始化');
+    return Directory(p.join(store.parent.path, 'data', 'playback-cache'));
+  }
+
+  void setPreloadNext(bool value) {
+    preloadNext = value;
+    _save();
+    notifyListeners();
+  }
+
   int quality = 0;
   double progress = 0;
   String status = '粘贴一部短剧，开始你的第一个合集。';
@@ -61,6 +74,7 @@ class StudioController extends ChangeNotifier {
           outputDirectory = data['directory'] as String? ?? defaultOutput;
         }
         normalize = data['normalize'] != false;
+        preloadNext = data['preloadNext'] != false;
         for (final item in data['history'] as List? ?? []) {
           if (item is Map &&
               item['title'] is String &&
@@ -115,6 +129,7 @@ class StudioController extends ChangeNotifier {
       'lastInput': lastInput,
       'directory': outputDirectory,
       'normalize': normalize,
+      'preloadNext': preloadNext,
       'busy': busy,
       'history': history,
       'dramaId': drama?.id,

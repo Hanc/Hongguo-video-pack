@@ -18,37 +18,96 @@ http.Response pageResponse(String route, Map<String, dynamic> page) =>
 
 void main() {
   test(
+    'refresh failure clears old rows and the same query always requests fresh data',
+    () async {
+      var searches = 0;
+      final c = DiscoveryController(
+        client: DiscoveryClient(
+          client: MockClient((request) async {
+            if (request.url.path != '/api/search/result') {
+              return http.Response('', 503);
+            }
+            searches++;
+            if (searches == 2) return http.Response('', 503);
+            return http.Response(
+              jsonEncode({
+                'pageNum': 1,
+                'totalPages': 1,
+                'totalCount': 1,
+                'searchList': [
+                  {'series_id': '$searches', 'series_title': '网游之 $searches'},
+                ],
+              }),
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+          }),
+        ),
+      );
+      addTearDown(c.dispose);
+      await c.show(DiscoveryMode.search, keyword: '网游之');
+      expect(c.items.single.id, '1');
+      await c.refresh();
+      expect(c.error, isNotNull);
+      expect(c.items, isEmpty);
+      expect(c.result, isNull);
+      await c.show(DiscoveryMode.search, keyword: '网游之');
+      expect(searches, 3);
+      expect(c.items.single.id, '3');
+    },
+  );
+
+  test('incorrect upstream page cannot masquerade as a new page', () async {
+    final client = DiscoveryClient(
+      client: MockClient(
+        (_) async => http.Response(
+          jsonEncode({'pageNum': 1, 'totalPages': 3, 'searchList': []}),
+          200,
+        ),
+      ),
+    );
+    addTearDown(client.close);
+    await expectLater(client.search('网游之', page: 2), throwsFormatException);
+  });
+  test(
     'default search makes one web request and never scans the catalogue',
     () async {
       final paths = <String>[];
       final client = DiscoveryClient(
         client: MockClient((req) async {
           paths.add(Uri.decodeComponent(req.url.path));
-          expect(Uri.decodeComponent(req.url.path), '/search/持械入宋');
-          return pageResponse('search_(keyword)/page', {
-            'isSuccess': true,
-            'query': '持械入宋',
-            'totalCount': 195,
-            'searchList': [
-              {
-                'video_data': {
-                  'series_id': '123',
-                  'series_title': '持械入宋：第一季',
-                  'hot_score_data': {'text': '5362万热度'},
+          expect(req.url.path, '/api/search/result');
+          expect(req.url.queryParameters['query'], '持械入宋');
+          final requested = int.parse(req.url.queryParameters['page'] ?? '1');
+          return http.Response(
+            jsonEncode({
+              'pageNum': requested,
+              'totalPages': 20,
+              'totalCount': 195,
+              'searchList': [
+                {
+                  'video_data': {
+                    'series_id': requested == 1 ? '123' : '456',
+                    'series_title': '持械入宋：第一季',
+                    'hot_score_data': {'text': '5362万热度'},
+                  },
                 },
-              },
-            ],
-          });
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
         }),
       );
       addTearDown(client.close);
       final page = await client.search('持械入宋');
-      expect(paths, ['/search/持械入宋']);
+      expect(paths, ['/api/search/result']);
       expect(page.items.single.metric, '5362万热度');
       expect(page.sourceTotal, 195);
-      expect(page.canExpand, isTrue);
-      expect(page.hasMore, isFalse);
-      await expectLater(client.search('持械入宋', page: 2), throwsStateError);
+      expect(page.canExpand, isFalse);
+      expect(page.hasMore, isTrue);
+      final second = await client.search('持械入宋', page: 2);
+      expect(second.items.single.id, '456');
     },
   );
 
@@ -57,15 +116,19 @@ void main() {
     final client = DiscoveryClient(
       client: MockClient((req) async {
         if (req.url.path == '/detail') return details.future;
-        expect(Uri.decodeComponent(req.url.path), '/search/测试');
-        return pageResponse('search_(keyword)/page', {
-          'isSuccess': true,
-          'query': '测试',
-          'totalCount': 1,
-          'searchList': [
-            {'series_id': '123', 'series_name': '测试'},
-          ],
-        });
+        expect(req.url.path, '/api/search/result');
+        return http.Response(
+          jsonEncode({
+            'pageNum': 1,
+            'totalPages': 1,
+            'totalCount': 1,
+            'searchList': [
+              {'series_id': '123', 'series_name': '测试'},
+            ],
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
       }),
     );
     final c = DiscoveryController(client: client);

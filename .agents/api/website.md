@@ -2,6 +2,18 @@
 
 基址：`https://hongguoduanju.com`。普通页面为 GET HTML，主要业务数据来自页面中的 `window._ROUTER_DATA.loaderData`；部分页面含流式路由数据。解析页面数据，不执行抓到的任意 JavaScript。
 
+## 2026-10-26 搜索与相关剧集更新（当前实现）
+
+- 搜索页已改为客户端请求 `GET /api/search/result`。参数 `aid=8662`、`query=<关键词>`，第一页可省略 page，后页传 `page=2` 等；不是旧 HTML loader 的后页模拟。
+- 返回 `searchList`、`totalCount`、`pageNum`、`totalPages`、`hasMore`、`accessibleEpisodeCnt`。searchList 混有演员和剧集，正式剧集位于 video_data；只解析有正式剧集 ID 的条目，统计继续区分热度和播放。
+- 本机无 Cookie / 登录凭据 / 共享身份的直接请求已返回有效数据；程序 HTTP 实测“网游之”第一页 10 条，第二页按前页 ID 去重后 9 条，totalPages=22。服务端两页存在少量重合，保留来源顺序并去重，不能据重合一条就伪称重复整页。
+- 每次主动搜索和刷新发送新请求；前后页也重新联网。仅保留当前搜索各页 ID 用于去重，不缓存或回显失败前的旧结果。新请求替代旧请求时，旧异步响应不得覆盖。
+- 403 来源验证需求作为失败反馈，不能绕过验证；当前不依赖浏览器 Cookie、a_bogus 或 msToken 的内置常量。官网前端通过安全 SDK 可能附带这些参数，本次直接请求通过不保证未来不会要求验证。
+- 官网详情 `GET /detail?series_id=<id>` 的 loaderData.detail_page.seriesDetail 确认请求 ID。推荐位于流式 script 的 data-fn-args：detail_page → recommendations → routerDataFnArgs[0] JSON → recommendationGroups.related_list。只取 related_list，不能混入 hot_list 冒充关联；实测 16 条。解析 HTML 属性与 JSON，不执行网站脚本。
+- App 专用关联推荐端点本次尚未取得可复验载荷；当前播放页的来源推荐使用上述官网同页数据，手工续季 / 番外检索使用当前实时搜索入口。
+
+下表及旧分页限制为 2026-10-19 的历史入口记录，不能用于否定上面的新接口实测。
+
 ## 接口目录
 
 | 方法 | 路径 | 请求参数 | 数据入口/用途 | 状态 |

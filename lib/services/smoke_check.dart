@@ -23,7 +23,7 @@ Future<void> runSearchAcceptance() async {
     }
     final first = await client.search('重生');
     final second = await client.search('重生', page: 2);
-    final back = await client.search('重生');
+    final back = await client.search('重生', refresh: false);
     final covered = await client.enrichMetrics([
       ...first.items,
       ...second.items,

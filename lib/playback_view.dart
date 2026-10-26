@@ -11,6 +11,9 @@ import 'playback_controller.dart';
 import 'playback_gestures.dart';
 import 'services/playback_engine.dart';
 import 'watch_history.dart';
+import 'data/discovery_client.dart';
+import 'related_controller.dart';
+import 'services/episode_preloader.dart';
 
 class PlaybackScreen extends StatefulWidget {
   const PlaybackScreen({
@@ -24,6 +27,7 @@ class PlaybackScreen extends StatefulWidget {
     this.videoBuilder,
     this.resume,
     this.nativeEngine,
+    this.relatedController,
   });
   final DramaSummary summary;
   final StudioController tasks;
@@ -34,6 +38,7 @@ class PlaybackScreen extends StatefulWidget {
   final Widget Function()? videoBuilder;
   final WatchPoint? resume;
   final NativePlaybackEngine? nativeEngine;
+  final RelatedController? relatedController;
   @override
   State<PlaybackScreen> createState() => _PlaybackScreenState();
 }
@@ -48,10 +53,96 @@ class _PlaybackScreenState extends State<PlaybackScreen>
   bool choosing = false, preparing = false;
   Timer? _historyTimer;
   StreamSubscription<bool>? _playingSubscription;
+  StreamSubscription<Duration>? _positionSubscription;
+  RelatedController? _related;
+  String? _relatedId, _checkedNearEnd;
   String? _checkpoint;
   bool _localLoading = false;
   String? _localError;
   bool get _local => widget.resume?.local == true;
+
+  void _dramaChanged() {
+    final drama = c.drama;
+    if (drama == null || _related == null || _relatedId == drama.id) return;
+    _relatedId = drama.id;
+    unawaited(_related!.load(drama.id, drama.title));
+  }
+
+  void _playRelated(DramaSummary drama) {
+    _saveProgress();
+    unawaited(c.engine.pause());
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => PlaybackScreen(
+          summary: drama,
+          tasks: widget.tasks,
+          onStitch: widget.onStitch,
+          onTasks: widget.onTasks,
+          onCloseWindow: widget.onCloseWindow,
+        ),
+      ),
+    );
+  }
+
+  Widget _relatedSection() => ListenableBuilder(
+    listenable: _related!,
+    builder: (context, _) {
+      final related = _related!;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  '相关剧集',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                ),
+              ),
+              IconButton(
+                onPressed: related.loading ? null : related.refresh,
+                tooltip: '刷新相关剧集',
+                icon: const Icon(Icons.refresh),
+              ),
+            ],
+          ),
+          if (related.loading) const LinearProgressIndicator(),
+          if (related.error != null) Text(related.error!),
+          if (!related.loading &&
+              related.items.isEmpty &&
+              related.error == null)
+            const Text('暂无相关剧集'),
+          for (final drama in related.items.take(20))
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: drama.cover.isEmpty
+                  ? const Icon(Icons.movie_outlined)
+                  : SizedBox(
+                      width: 42,
+                      height: 56,
+                      child: Image.network(
+                        drama.cover,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) =>
+                            const Icon(Icons.movie_outlined),
+                      ),
+                    ),
+              title: Text(
+                drama.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                '${related.manual.any((row) => row.id == drama.id) ? '同名系列 · ' : ''}${drama.episodes} 集${drama.metric.isEmpty ? '' : ' · ${drama.metric}'}',
+              ),
+              trailing: const Icon(Icons.play_arrow_rounded),
+              onTap: () => _playRelated(drama),
+            ),
+        ],
+      );
+    },
+  );
 
   void _saveProgress() {
     final native = _native;
@@ -193,7 +284,22 @@ class _PlaybackScreenState extends State<PlaybackScreen>
       _native = widget.nativeEngine ?? NativePlaybackEngine();
       _video = VideoController(_native!.player);
     }
-    c = widget.controller ?? PlaybackController(engine: _native!);
+    c =
+        widget.controller ??
+        PlaybackController(
+          engine: _native!,
+          preloader: EpisodePreloader(
+            directory: widget.tasks.playbackCacheDirectory,
+          ),
+        );
+    c.setPreloadNext(widget.tasks.preloadNext);
+    _related =
+        widget.relatedController ??
+        (widget.controller == null && !_local
+            ? RelatedController(client: DiscoveryClient())
+            : null);
+    c.addListener(_dramaChanged);
+    _dramaChanged();
     c.onBeforeChange = _saveProgress;
     if (_local) {
       unawaited(_openLocal());
@@ -212,6 +318,24 @@ class _PlaybackScreenState extends State<PlaybackScreen>
       );
     }
     if (_native != null) {
+      _positionSubscription = _native!.player.stream.position.listen((
+        position,
+      ) {
+        if (_local || !_native!.player.state.playing) return;
+        final duration = _native!.player.state.duration;
+        c.onProgress(position, duration);
+        final drama = c.drama;
+        if (!c.loading &&
+            c.error == null &&
+            drama != null &&
+            c.index == drama.episodes.length - 1 &&
+            duration.inMilliseconds > 0 &&
+            position.inMilliseconds >= duration.inMilliseconds * .8 &&
+            _checkedNearEnd != drama.id) {
+          _checkedNearEnd = drama.id;
+          if (_related != null) unawaited(_related!.refresh());
+        }
+      });
       _historyTimer = Timer.periodic(const Duration(seconds: 5), (_) {
         if (_native!.player.state.playing) _saveProgress();
       });
@@ -228,7 +352,10 @@ class _PlaybackScreenState extends State<PlaybackScreen>
       _saveProgress();
       unawaited(widget.tasks.watchHistory.flush());
     }
-    if (state == AppLifecycleState.paused) unawaited(c.engine.pause());
+    if (state == AppLifecycleState.paused) {
+      c.suspendPreload();
+      unawaited(c.engine.pause());
+    }
   }
 
   @override
@@ -236,6 +363,9 @@ class _PlaybackScreenState extends State<PlaybackScreen>
     WidgetsBinding.instance.removeObserver(this);
     _historyTimer?.cancel();
     unawaited(_playingSubscription?.cancel());
+    unawaited(_positionSubscription?.cancel());
+    c.removeListener(_dramaChanged);
+    if (widget.relatedController == null) _related?.dispose();
     _saveProgress();
     c.onBeforeChange = null;
     if (widget.controller == null) c.dispose();
@@ -466,6 +596,20 @@ class _PlaybackScreenState extends State<PlaybackScreen>
                                 Switch(
                                   value: c.autoAdvance,
                                   onChanged: c.setAutoAdvance,
+                                ),
+                              ],
+                            ),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Text('预加载下一集'),
+                                Switch(
+                                  key: const ValueKey('preload-next-switch'),
+                                  value: c.preloadNext,
+                                  onChanged: (value) {
+                                    widget.tasks.setPreloadNext(value);
+                                    c.setPreloadNext(value);
+                                  },
                                 ),
                               ],
                             ),
@@ -702,6 +846,7 @@ class _PlaybackScreenState extends State<PlaybackScreen>
                               ),
                             ],
                           ),
+                        if (_related != null) _relatedSection(),
                         const SizedBox(height: 20),
                       ],
                     ],

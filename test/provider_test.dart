@@ -105,6 +105,23 @@ void main() {
     expect(drama.title, '标题 } " 测试');
     expect(() => parseWebDrama(html, '999'), throwsFormatException);
   });
+  test('detail page fallback requires the complete episode list', () {
+    String html(int count) =>
+        'window._ROUTER_DATA=${jsonEncode({
+          'loaderData': {
+            'detail_page': {
+              'seriesDetail': {
+                'series_id': '123',
+                'series_name': '剧集',
+                'episode_cnt': count,
+                'vid_list': ['7', '8'],
+              },
+            },
+          },
+        })}';
+    expect(parseWebDrama(html(2), '123').episodes.length, 2);
+    expect(() => parseWebDrama(html(3), '123'), throwsFormatException);
+  });
   test(
     'App failure falls back to page details but empty media remains an error',
     () async {

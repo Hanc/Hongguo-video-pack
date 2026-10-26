@@ -141,17 +141,29 @@ class HongguoClient {
       });
       return parseAppDrama(result, id);
     } catch (appError) {
-      try {
-        final response = await _http
-            .get(Uri.https('hongguoduanju.com', '/player/$id'))
-            .timeout(const Duration(seconds: 25));
-        if (response.statusCode != 200) {
-          throw StateError('网页 HTTP ${response.statusCode}');
+      for (final uri in [
+        Uri.https('hongguoduanju.com', '/detail', {'series_id': id}),
+        Uri.https('hongguoduanju.com', '/player/$id'),
+      ]) {
+        try {
+          final response = await _http
+              .get(
+                uri,
+                headers: const {
+                  'User-Agent': 'Mozilla/5.0',
+                  'Accept': 'text/html',
+                },
+              )
+              .timeout(const Duration(seconds: 25));
+          if (response.statusCode != 200) {
+            throw StateError('网页 HTTP ${response.statusCode}');
+          }
+          return parseWebDrama(utf8.decode(response.bodyBytes), id);
+        } catch (_) {
+          continue;
         }
-        return parseWebDrama(utf8.decode(response.bodyBytes), id);
-      } catch (_) {
-        throw StateError('读取剧集失败：$appError；网页回退也未返回有效分集');
       }
+      throw StateError('读取剧集失败：$appError；网页回退也未返回有效分集');
     }
   }
 
@@ -307,7 +319,7 @@ Drama parseWebDrama(String html, String expectedId) {
   );
   final page = loader.entries.where(
     (e) =>
-        e.key.startsWith('player_') &&
+        (e.key.startsWith('player_') || e.key == 'detail_page') &&
         object(e.value).containsKey('seriesDetail'),
   );
   if (page.isEmpty) throw const FormatException('网页没有剧集详情');
@@ -317,6 +329,9 @@ Drama parseWebDrama(String html, String expectedId) {
   }
   final ids = detail['vid_list'] as List? ?? [];
   if (ids.isEmpty) throw const FormatException('网页没有分集');
+  if (integer(detail['episode_cnt']) > ids.length) {
+    throw const FormatException('网页未返回完整分集');
+  }
   return Drama(
     id: expectedId,
     title: text(detail['series_name']),
