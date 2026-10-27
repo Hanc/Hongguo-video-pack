@@ -52,3 +52,13 @@ Flutter Windows/Android 工程已初始化。Windows 构建及原生视频引擎
 - 程序自己的 Dart 模块已联网连续取得两页：5 条与 9 条正式剧集，无重复，第二批 9 条带热度，返回首批使用页缓存。此验证使用 `.local` 的本机诊断身份，并不证明首次自动注册已完成。
 - 首次身份初始化仍待解决：受控注册实验（普通压缩与 TTEncrypt 请求）未获得有效身份。相关第三方研究参考仅保存在 `.local`，没有新增 Python、JVM 或模拟器运行依赖到交付包。
 - 原始 HAR、身份、请求签名、完整响应和注册实验均保留在 `.local/traffic-infra/`，不进入源码包或发行包。尚未重打包新发行版本。
+
+## 2026-10-27 App 播放接口整体空包
+
+用户报「视频无法访问，首页正常」。逐层定位后确认是上游接口故障，不是签名或解析缺陷：
+
+- `POST https://api5-normal-sinfonlineb.fqnovel.com/novel/player/video_detail/v1/`（`series_id=7671966197985856536`）：HTTP 200、`content-type: application/json`、`content-length: 0`、`server: volc-dcdn`。带完整签名、带备用 `X-Helios`/`X-Medusa`、去掉 `X-Gorgon`、改 GET、改 `api5-normal-sinfonlinec` 主机，结果同样是 200 空包。同一份 Node 签名代码在两小时内曾拿到 `code=0` 与 100 集数据，属间歇性。
+- `POST /novel/player/multi_video_model/v1/`（`mixed_video_id_map: {"1004": [videoId]}` + `x-argus`/`x-gorgon`/`x-helios`/`x-medusa`）：同样 200，正文 0 字节。
+- 网页 `POST https://hongguoduanju.com/api/video/protected/play-info`：`{"code":1,"message":"protected_playback_unavailable"}`，受保护播放整体关闭。
+- 网页剧集页仍带 `window._ROUTER_DATA`，其中 `videoDetail.contentUrl` 指向 `https://hongguoduanju.com/video/public/<vid>/360p.mp4`，`HEAD` 返回 200、`content-type: video/mp4`、`content-length: 8080192`，是可播的公开低清文件。
+- 因此 0.9.0 改为「App 接口（重试一次）→ 网页公开 360P」的兜底顺序；兜底只有单一清晰度，接口恢复后自动回高清。公开文件是渐进式 mp4，不带 CENC 加密，无需 `decryption_key`。

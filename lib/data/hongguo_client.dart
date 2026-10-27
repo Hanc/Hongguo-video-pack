@@ -158,10 +158,36 @@ class HongguoClient {
     }
   }
 
+  /// 播放地址优先走 App 接口，接口整体不可用时退回网页公开画质。
+  ///
+  /// 2026-10-27 起 App 播放接口（详情与 `multi_video_model`）经常返回
+  /// HTTP 200 + 空包，网页播放器的受保护接口回 `protected_playback_unavailable`，
+  /// 只有网页 SEO 数据里的 `/video/public/<vid>/360p.mp4` 一直可取。实测同一台
+  /// 机器上 App 接口是时好时坏，所以先重试一次，再退到网页公开画质兜底。
   Future<List<MediaVariant>> fetchVariants(
     Episode episode, {
     String? seriesId,
   }) async {
+    Object? appError;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await _appVariants(episode);
+      } catch (error) {
+        appError = error;
+        if (attempt == 0) {
+          await Future<void>.delayed(const Duration(milliseconds: 400));
+        }
+      }
+    }
+    try {
+      return await _publicVariants(episode);
+    } catch (_) {
+      throw StateError('读取播放地址失败：$appError；网页公开画质也不可用');
+    }
+  }
+
+  /// App 播放接口主路径：`multi_video_model` → `fallback_api` → `video_info`。
+  Future<List<MediaVariant>> _appVariants(Episode episode) async {
     final body = jsonEncode({
       'biz_param': {
         'detail_page_version': 0,
@@ -239,6 +265,38 @@ class HongguoClient {
       object(decodeApiResponse(infoResponse)['video_info'])['data'],
     );
     return parsePlaybackInfo(info);
+  }
+
+  /// 网页公开画质兜底：`/video/public/<vid>/360p.mp4`。
+  ///
+  /// 这条地址来自网页播放页的 SEO 数据（`contentUrl`），不需要签名与内容密钥，
+  /// 文件本身是 H.264 + AAC 的普通 MP4，可以直接播放。代价是只有 360P，
+  /// 且并非每部剧都有——拿不到就说明兜底也不可用。
+  Future<List<MediaVariant>> _publicVariants(Episode episode) async {
+    if (!RegExp(r'^\d{1,32}$').hasMatch(episode.id)) {
+      throw const FormatException('分集 ID 无效');
+    }
+    final url = Uri.https(
+      'hongguoduanju.com',
+      '/video/public/${episode.id}/360p.mp4',
+    );
+    final response = await _http
+        .head(url, headers: const {'Referer': 'https://hongguoduanju.com/'})
+        .timeout(const Duration(seconds: 20));
+    final type = response.headers['content-type'] ?? '';
+    if (response.statusCode != 200 ||
+        !type.startsWith('video/') ||
+        integer(response.headers['content-length']) <= 0) {
+      throw StateError('网页公开画质不可用（HTTP ${response.statusCode}）');
+    }
+    return [
+      MediaVariant(
+        url: url.toString(),
+        quality: 360,
+        codec: 'h264',
+        source: '网页公开画质',
+      ),
+    ];
   }
 
   void close() => _http.close();

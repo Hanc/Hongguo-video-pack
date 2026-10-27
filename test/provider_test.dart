@@ -105,6 +105,49 @@ void main() {
     expect(drama.title, '标题 } " 测试');
     expect(() => parseWebDrama(html, '999'), throwsFormatException);
   });
+  test('App failure falls back to the public 360p file', () async {
+    final client = HongguoClient(
+      signer: FakeSigner(),
+      client: MockClient((request) async {
+        if (request.url.host == 'hongguoduanju.com' &&
+            request.method == 'HEAD') {
+          expect(request.url.path, '/video/public/9/360p.mp4');
+          return http.Response('', 200, headers: {
+            'content-type': 'video/mp4',
+            'content-length': '1062050',
+          });
+        }
+        if (request.url.host == 'hongguoduanju.com') {
+          return http.Response(
+            'window._ROUTER_DATA=${jsonEncode({
+              'loaderData': {
+                'player_x': {
+                  'seriesDetail': {
+                    'series_id': '123',
+                    'series_name': '测试',
+                    'vid_list': ['9'],
+                  },
+                },
+              },
+            })};',
+            200,
+            headers: {'content-type': 'text/html; charset=utf-8'},
+          );
+        }
+        return http.Response('', 200);
+      }),
+    );
+    final drama = await client.fetchDrama('123');
+    final variants = await client.fetchVariants(drama.episodes.first);
+    expect(variants.single.quality, 360);
+    expect(variants.single.source, '网页公开画质');
+    expect(
+      variants.single.url,
+      'https://hongguoduanju.com/video/public/9/360p.mp4',
+    );
+    client.close();
+  });
+
   test(
     'App failure falls back to page details but empty media remains an error',
     () async {
