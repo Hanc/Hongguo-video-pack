@@ -41,6 +41,7 @@
 | 发现页、缓存、追剧列表 | `check` + `test -Arg test/discovery_widget_test.dart` | APK |
 | 打包、安装器、版本号 | `dev.ps1 setup` + `dev.ps1 dist` | 单测（除非版本号写进代码） |
 | 发版 | `dev.ps1 release` | — |
+| 发布到对象存储 | `node scripts/publish-cos.mjs release`（两平台约 40 秒，含回读校验） | 重新构建（产物没变就不必重打） |
 
 `dev.ps1 release` 会把 Windows 与 Android 两条不共享工具链的构建并行跑，再依次做安装包与打包，并在结束时自动还原 `pubspec.lock`。
 

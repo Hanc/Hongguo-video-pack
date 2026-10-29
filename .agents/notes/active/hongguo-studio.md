@@ -90,6 +90,15 @@ supersedes: []
 - 结果写在应用支持目录 `device-identity.json`，跨启动复用；注册失败只尝试一次，之后整进程沿用随机值并退回网页公开画质。
 - 边界：匿名 ≠ 登录。它不换取账号能力、不改变授权范围，也不构成「账户登录与授权画质」目标的完成；被封禁的分集依旧取不到。
 
+## 应用内更新（0.11.0）
+
+- 发布凭据不在仓库与安装包里，只读 `.local/cos.json`；`scripts/publish-cos.mjs` 负责上传、改写清单并回读校验，只用 Node 内置模块。
+- 清单两份固定路径：`updates/windows/latest.json`、`updates/android/latest.json`。字段 `platform` / `version` / `versionCode` / `url` / `size` / `sha256` / `kind` / `notes`；`url` 必须是 https，`platform` 不符即整份清单作废。
+- 只按 `versionCode` 判断新旧；下载完成后逐字节核对 `sha256` 与 `size`，不符就丢弃并报错，不得「先安装再校验」。
+- 用户明确点击「检查更新」才联网检查；不后台轮询、不静默下载、不静默安装。Windows 交给 `Setup.exe` 由用户完成，Android 走系统安装器（需系统允许安装未知应用）。
+- 验收命令 `--update-check`（`--current-code=` 只用于压低当前版本号做验收）；线上真实清单与真实安装包大小/哈希已实测，但「下载 81 MB 后真的安装」未纳入自动化，见 `docs/acceptance-0.11.0.md`。
+- 边界：这是自建分发，不换签名、不做增量差分；升级包必须与已安装版本同一签名，否则系统会拒绝覆盖安装。
+
 ## 禁止方案
 
 - [搜索与兜底边界](../prohibited/search-fallbacks.md)

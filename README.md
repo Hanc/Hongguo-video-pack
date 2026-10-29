@@ -1,10 +1,10 @@
 # 红葡萄 Hongputao
 
-Flutter Windows / Android 选剧、播放与合集制作工具。0.4.x 增加播放倍速（0.5x–2x，入口在播放器控制栏内，含记忆）与连播预取（提前取好下一集地址；播放器仍是单个 media_kit Player，避免双实例造成的全屏暂停与暂停后仍有声音）；修正 Windows 版本资源字符串编码，`ProductName` 不再被编译成乱码（这曾导致新版把设置与访客身份读写到错误目录而无法取流）；签名 worker 在应用支持目录不可写时自动降级到临时目录，避免整条取流因单点写入失败而报“播放准备失败”。发现页对榜单/分类页做 3 分钟页面缓存并预热其余榜单：来源改版后单页涨到 339 KB、服务端首字节 1–27 秒，重复切换不再重复等待。0.3.0 更名为“红葡萄”，采用用户提供的方形葡萄 Logo；搜索/榜单卡片可直接播放或进入拼接，播放页支持切集、清晰度、连播、范围选集、发起拼接和任务管理。桌面侧栏、手机底部导航，继续使用无边框卡片、阴影和留白。0.8.x 起播放页手势改为红果式：整屏上下滑切上一集/下一集，左右两侧双击前后跳 10 秒、中间双击暂停，长按 400 ms 加速到 2 倍且不再唤出控制栏；控制栏改为自绘，保留倍速、可拖进度条、全屏与退出全屏按钮。0.8.2 修复首页搜索：来源网站的 `/search/<关键词>` 页面改为前端渲染后只剩脚本外壳，程序改从 `/api/search/result` 取 JSON，恢复搜索结果并支持真实翻页。
+Flutter Windows / Android 选剧、播放与合集制作工具。0.4.x 增加播放倍速（0.5x–2x，入口在播放器控制栏内，含记忆）与连播预取（提前取好下一集地址；播放器仍是单个 media_kit Player，避免双实例造成的全屏暂停与暂停后仍有声音）；修正 Windows 版本资源字符串编码，`ProductName` 不再被编译成乱码（这曾导致新版把设置与访客身份读写到错误目录而无法取流）；签名 worker 在应用支持目录不可写时自动降级到临时目录，避免整条取流因单点写入失败而报“播放准备失败”。发现页对榜单/分类页做 3 分钟页面缓存并预热其余榜单：来源改版后单页涨到 339 KB、服务端首字节 1–27 秒，重复切换不再重复等待。0.3.0 更名为“红葡萄”，采用用户提供的方形葡萄 Logo；搜索/榜单卡片可直接播放或进入拼接，播放页支持切集、清晰度、连播、范围选集、发起拼接和任务管理。桌面侧栏、手机底部导航，继续使用无边框卡片、阴影和留白。0.8.x 起播放页手势改为红果式：整屏上下滑切上一集/下一集，左右两侧双击前后跳 10 秒、中间双击暂停，长按 400 ms 加速到 2 倍且不再唤出控制栏；控制栏改为自绘，保留倍速、可拖进度条、全屏与退出全屏按钮。0.8.2 修复首页搜索：来源网站的 `/search/<关键词>` 页面改为前端渲染后只剩脚本外壳，程序改从 `/api/search/result` 取 JSON，恢复搜索结果并支持真实翻页。0.9.0 起 App 播放接口返回空包时自动退回网页公开画质（360P），不再整部剧无法播放。0.10.0 注册本机匿名播放身份后恢复 1080P/720P 取流，该身份只保存在本机、可删除后重新注册。0.11.0 增加应用内更新检查：读取对象存储上的版本清单、下载安装包并校验 SHA-256 后交给系统安装器。
 
 ## 使用
 
-- **Windows 10/11 x64**：运行 `Hongputao-Windows-0.8.2-Setup.exe` 安装，可选择目录与桌面快捷方式，开始菜单提供启动和卸载入口。默认安装目录和应用标识保留升级兼容，无需管理员权限或另装 Flutter、Node、FFmpeg、Java。升级前请结束任务并退出旧版；安装程序不会强制关闭任务。卸载保留用户设置和导出视频。便携包仅作为备用交付。
+- **Windows 10/11 x64**：运行 `Hongputao-Windows-Setup.exe` 安装，可选择目录与桌面快捷方式，开始菜单提供启动和卸载入口。默认安装目录和应用标识保留升级兼容，无需管理员权限或另装 Flutter、Node、FFmpeg、Java。升级前请结束任务并退出旧版；安装程序不会强制关闭任务。卸载保留用户设置和导出视频。便携包仅作为备用交付。
 - **Android 8.0+ ARM64**：安装交付的 APK。下载和拼接使用前台服务，通知显示受系统设置影响；成品先写入应用内目录，完成后点击“保存到手机”，通过系统文件选择器另存。卸载前请另存需要保留的视频。
 - 输入红果播放页链接或剧集 ID，点击“读取剧集”。默认选中前两集，可点选、全选或按范围选择。
 - 清晰度列表只显示来源实际返回且可处理的档位；当前示例能返回原始 1080P。访客取流已经可用，不需要从其他播放器导入账号。本版没有官方账号登录功能；App 搜索的访客初始化边界见下文。
@@ -78,6 +78,38 @@ Windows Release 整体检查：在项目根目录运行 `build/windows/x64/runne
 本地跑上述任一流程建议用 `scripts/run-local-acceptance.ps1 -Mode switch|playback|fullscreen|search|smoke`：它把 `TEMP`/`TMP` 指到仓库内 `.local/tmp` 再启动成品程序。原因是 `media_kit` 截图走 `Directory.systemTemp`，`%TEMP%` 不可写时会以 `Cannot create file ... errno = 5` 直接退出；2026-10-22 起该失败也会把原因与栈打到 stderr（此前是静默 `exit(1)`）。
 
 播放页手势与控件映射见 [docs/player-interaction.md](docs/player-interaction.md)。
+
+## 发布与自动更新
+
+安装包里不含发布凭据。发布前把对象存储的写入凭据放进 `.local/cos.json`（已忽略，不要提交）：
+
+```json
+{
+  "bucket": "hongputao-1308285894",
+  "region": "ap-guangzhou",
+  "secretId": "……",
+  "secretKey": "……"
+}
+```
+
+`scripts/publish-cos.mjs` 负责上传与自检（只依赖 Node 内置模块，不装 SDK）：
+
+```powershell
+node scripts/publish-cos.mjs probe                 # 探测桶是否「可写 + 公有读」
+node scripts/publish-cos.mjs push --file dist\Hongputao-Windows-0.11.0-Setup.exe --platform windows --sha256 <哈希>
+node scripts/publish-cos.mjs release --notes "更新说明"   # 按 dist\ 现有产物上传并改写清单
+```
+
+清单固定两份，其余对象名都带内容哈希、不可枚举：
+
+```
+updates/windows/latest.json
+updates/android/latest.json
+```
+
+应用内「关于与许可 → 检查更新」只按 `versionCode` 比较新旧，下载后逐字节核对 `sha256` 与大小，不匹配就丢弃；Android 走系统安装器（需系统允许安装未知应用）。验收用 `hongguo_studio.exe --update-check`（结果写入 `.local/update-check/result.json`），边界见 [docs/acceptance-0.11.0.md](docs/acceptance-0.11.0.md)。
+
+防盗刷的实际手段是「桶权限 + 密钥最小化 + 余额上限」，而不是把地址藏起来：桶为公有读/私有写，写入凭据只用于发布机器，账户里不要留大额余额。
 
 GitHub Actions 自动构建/Release 流程及首次签名 Secrets 配置见 [docs/releasing.md](docs/releasing.md)；透明图标母版及导出说明见 [docs/branding.md](docs/branding.md)。
 

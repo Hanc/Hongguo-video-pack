@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:media_kit/media_kit.dart';
 import 'app_controller.dart';
+import 'app_version.dart';
 import 'services/smoke_check.dart';
 import 'data/request_signer.dart';
 import 'discovery_controller.dart';
@@ -16,9 +18,11 @@ import 'discovery_view.dart';
 import 'domain/discovery.dart';
 import 'domain/drama.dart';
 import 'playback_view.dart';
+import 'update_view.dart';
 import 'services/app_storage.dart';
 import 'services/playback_acceptance.dart';
 import 'services/source_health.dart';
+import 'services/update_service.dart';
 
 const accent = Color(0xFFC20032);
 const ink = Color(0xFF24242D);
@@ -29,6 +33,10 @@ bool get desktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (arguments.contains('--update-check')) {
+    await runUpdateCheck(arguments);
+    return;
+  }
   MediaKit.ensureInitialized();
   if (desktop) {
     await windowManager.ensureInitialized();
@@ -82,6 +90,50 @@ Future<void> main(List<String> arguments) async {
     }
   }
   runApp(const StudioApp());
+}
+
+/// `--update-check` 验收入口：走真实 HTTPS 读线上清单，把结论写成 JSON。
+///
+/// 只验证「能不能读到清单 + 版本比较对不对」，不下载安装包；安装包下载与
+/// 校验由 `UpdateService.download` 负责，并由单元测试覆盖 sha256 不匹配的分支。
+Future<void> runUpdateCheck(List<String> arguments) async {
+  final override = arguments.firstWhere(
+    (argument) => argument.startsWith('--current-code='),
+    orElse: () => '',
+  );
+  final current = override.isEmpty
+      ? appVersionCode
+      : int.tryParse(override.split('=').last) ?? appVersionCode;
+  final check = await UpdateService().check(currentVersionCode: current);
+  final update = check.update;
+  final payload = <String, Object?>{
+    'checkedAt': DateTime.now().toIso8601String(),
+    'platform': UpdateService.defaultPlatform,
+    'currentVersion': appVersion,
+    'currentVersionCode': appVersionCode,
+    'status': check.hasError
+        ? 'error'
+        : (update != null ? 'available' : 'current'),
+    if (check.error != null) 'error': check.error,
+    if (update != null) ...{
+      'latestVersion': update.version,
+      'latestVersionCode': update.versionCode,
+      'size': update.size,
+      'sha256': update.sha256,
+      'url': update.url.toString(),
+      'notes': update.notes,
+    },
+  };
+  final line = const JsonEncoder.withIndent('  ').convert(payload);
+  stdout.writeln(line);
+  try {
+    final report = File(p.join('.local', 'update-check', 'result.json'));
+    await report.parent.create(recursive: true);
+    await report.writeAsString(line, flush: true);
+  } catch (error) {
+    stderr.writeln('无法写入报告：$error');
+  }
+  exit(check.hasError ? 1 : 0);
 }
 
 class StudioApp extends StatelessWidget {
@@ -190,7 +242,7 @@ class _StudioHomeState extends State<StudioHome> {
           if (!started) {
             started = true;
             WidgetsBinding.instance.addPostFrameCallback((_) async {
-              final checker = SourceHealthChecker(version: '0.10.0');
+              final checker = SourceHealthChecker(version: appVersion);
               try {
                 final result = await checker.run(
                   onProgress: (done, _, name) {
@@ -775,10 +827,16 @@ class _StudioHomeState extends State<StudioHome> {
                                     onPressed: () => showAboutDialog(
                                       context: context,
                                       applicationName: '红葡萄',
-                                      applicationVersion: '0.10.0',
+                                      applicationVersion: appVersion,
                                       applicationLegalese:
                                           '访客来源 · 本地制作\n包含 GPL-3.0 协议适配与 FFmpeg 组件。源码与第三方声明随交付包提供。',
                                       children: [
+                                        TextButton(
+                                          onPressed: () => showUpdateDialog(
+                                            context,
+                                          ),
+                                          child: const Text('检查更新'),
+                                        ),
                                         TextButton(
                                           onPressed: () => _runSourceCheck(),
                                           child: const Text('来源自检'),
@@ -814,7 +872,7 @@ class _StudioHomeState extends State<StudioHome> {
                                       ],
                                     ),
                                     child: const Text(
-                                      '红葡萄 · v0.10.0 · 关于与许可',
+                                      '红葡萄 · $appVersionLabel · 关于与许可',
                                       style: TextStyle(
                                         fontSize: 11,
                                         color: muted,

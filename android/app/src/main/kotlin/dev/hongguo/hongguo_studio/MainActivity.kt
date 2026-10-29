@@ -112,6 +112,20 @@ class MainActivity : FlutterActivity() {
                         startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/mp4").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
                         result.success(true)
                     }
+                    "installApk" -> {
+                        val path = requireNotNull(call.argument<String>("path"))
+                        val file = File(path).canonicalFile
+                        val root = File(filesDir, "updates").canonicalPath + File.separator
+                        require(file.isFile && file.path.startsWith(root)) { "安装包不在下载目录内" }
+                        if (!packageManager.canRequestPackageInstalls()) {
+                            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                            result.error("INSTALL", "请在系统设置里允许安装未知应用，然后重新点“立即安装”", null)
+                        } else {
+                            val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
+                            startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
+                            result.success(true)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             } catch (_: Exception) { result.error("PLATFORM", "无法完成操作，请重试或选择其他应用", null) }
