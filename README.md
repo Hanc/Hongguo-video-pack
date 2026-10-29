@@ -95,8 +95,9 @@ Windows Release 整体检查：在项目根目录运行 `build/windows/x64/runne
 `scripts/publish-cos.mjs` 负责上传与自检（只依赖 Node 内置模块，不装 SDK）：
 
 ```powershell
-node scripts/publish-cos.mjs probe                 # 探测桶是否「可写 + 公有读」
-node scripts/publish-cos.mjs push --file dist\Hongputao-Windows-0.11.0-Setup.exe --platform windows --sha256 <哈希>
+node scripts/publish-cos.mjs probe                    # 探测桶是否「可写 + 公有读」
+node scripts/publish-cos.mjs stage                    # 按远端路径把产物整理到 dist\remote\
+node scripts/publish-cos.mjs push-android dist\Hongputao-Android-arm64-0.11.1.apk --notes "更新说明"
 node scripts/publish-cos.mjs release --notes "更新说明"   # 按 dist\ 现有产物上传并改写清单
 ```
 
@@ -106,6 +107,15 @@ node scripts/publish-cos.mjs release --notes "更新说明"   # 按 dist\ 现有
 updates/windows/latest.json
 updates/android/latest.json
 ```
+
+**安装包不能放 COS 默认域名**：腾讯云对 `*.myqcloud.com` 分发 APK/IPA 只堵 `GET`（`403 DownloadForbidden`），`HEAD` 仍回 200。装自己的服务器后，清单留在 COS（存量客户端只知道这个地址），包从自建域名下载：
+
+```powershell
+$env:HONGGUO_SERVER_BASE  = 'https://dl.example.com'
+$env:HONGGUO_UPLOAD_TOKEN = '<服务端令牌>'
+```
+
+部署脚本、nginx 配置、自检命令与故障对照见 [docs/self-hosted-dist.md](docs/self-hosted-dist.md)（服务端是零依赖的 `server/dl-server.mjs`）。
 
 应用内「关于与许可 → 检查更新」只按 `versionCode` 比较新旧，下载后逐字节核对 `sha256` 与大小，不匹配就丢弃；Android 走系统安装器（需系统允许安装未知应用）。验收用 `hongguo_studio.exe --update-check`（结果写入 `.local/update-check/result.json`），边界见 [docs/acceptance-0.11.0.md](docs/acceptance-0.11.0.md)。
 
