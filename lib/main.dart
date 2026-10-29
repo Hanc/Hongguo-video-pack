@@ -872,7 +872,7 @@ class _StudioHomeState extends State<StudioHome> {
                                       ],
                                     ),
                                     child: const Text(
-                                      '红葡萄 · $appVersionLabel · 关于与许可',
+                                      '红葡萄 · $appVersionLabel · 构建 $appBuildStamp · 关于与许可',
                                       style: TextStyle(
                                         fontSize: 11,
                                         color: muted,

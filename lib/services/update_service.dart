@@ -70,7 +70,16 @@ class UpdateInfo {
       size: size is int ? size : 0,
       sha256: digest,
       kind: json['kind'] is String ? json['kind'] as String : 'apk',
-      notes: notes is List ? notes.whereType<String>().toList(growable: false) : const <String>[],
+      // 发布脚本写的是单段字符串，早期清单可能给数组，两种都接受。
+      notes: switch (notes) {
+        final String text => text
+            .split('\n')
+            .map((line) => line.trim())
+            .where((line) => line.isNotEmpty)
+            .toList(growable: false),
+        final List<dynamic> list => list.whereType<String>().toList(growable: false),
+        _ => const <String>[],
+      },
       publishedAt: json['publishedAt'] is String ? json['publishedAt'] as String : null,
     );
   }

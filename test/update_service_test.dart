@@ -53,6 +53,20 @@ void main() {
     expect(result.update!.sizeLabel, '4 KB');
   });
 
+  test('single-string notes are split into lines', () async {
+    final service = UpdateService(
+      base: _base,
+      platform: 'android',
+      client: MockClient((request) async {
+        final body = _manifest(sha256: hexOf('a'));
+        body['notes'] = '版本号 0.11.1\n关于页新增构建日期\n\n';
+        return _json(body);
+      }),
+    );
+    final result = await service.check(currentVersionCode: 24);
+    expect(result.update!.notes, ['版本号 0.11.1', '关于页新增构建日期']);
+  });
+
   test('the installed build is reported as current', () async {
     final service = UpdateService(
       base: _base,
