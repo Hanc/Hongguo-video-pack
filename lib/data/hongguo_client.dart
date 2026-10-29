@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import '../domain/drama.dart';
+import 'device_registrar.dart';
 import 'request_signer.dart';
 import 'media_crypto.dart';
 
@@ -73,18 +74,39 @@ List<MediaVariant> parsePlaybackInfo(Json info) {
 
 /// App protocol adapter. No third-party parsing service or embedded account.
 class HongguoClient {
-  HongguoClient({http.Client? client, RequestSigner? signer})
-    : _http = client ?? http.Client(),
-      signer = signer ?? NativeRequestSigner();
+  HongguoClient({
+    http.Client? client,
+    RequestSigner? signer,
+    DeviceRegistrar? registrar,
+  }) : _http = client ?? http.Client(),
+       signer = signer ?? NativeRequestSigner(),
+       registrar = registrar ?? DeviceRegistrar();
   final http.Client _http;
   final RequestSigner signer;
-  final String deviceId = _deviceId();
-  final String installId = _deviceId();
+  final DeviceRegistrar registrar;
+
+  /// 来源认可的匿名设备身份；注册完成前先用本地随机值占位。
+  String deviceId = _deviceId();
+  String installId = _deviceId();
+  String? cdid;
+  Future<void>? _identity;
   static const appHost = 'api5-normal-sinfonlineb.fqnovel.com';
   static String _deviceId() =>
       '7${List.generate(15, (_) => Random.secure().nextInt(10)).join()}';
 
+  /// 只注册一次：成功则换掉占位值，失败则沿用随机值（此时播放会退回网页公开画质）。
+  Future<void> _ensureIdentity() => _identity ??= _applyIdentity();
+
+  Future<void> _applyIdentity() async {
+    final resolved = await registrar.identity();
+    if (resolved == null) return;
+    deviceId = resolved.deviceId;
+    installId = resolved.installId;
+    cdid = resolved.cdid;
+  }
+
   Future<Json> _post(String path, Json payload) async {
+    await _ensureIdentity();
     final now = DateTime.now();
     final query = SplayTreeMap<String, String>.from({
       'aid': '8662',
@@ -107,6 +129,7 @@ class HongguoClient {
       'ac': 'wifi',
       'device_id': deviceId,
       'iid': installId,
+      'cdid': ?cdid,
       '_rticket': '${now.millisecondsSinceEpoch}',
     });
     final uri = Uri.https(appHost, path, query);
@@ -188,6 +211,7 @@ class HongguoClient {
 
   /// App 播放接口主路径：`multi_video_model` → `fallback_api` → `video_info`。
   Future<List<MediaVariant>> _appVariants(Episode episode) async {
+    await _ensureIdentity();
     final body = jsonEncode({
       'biz_param': {
         'detail_page_version': 0,
@@ -206,6 +230,7 @@ class HongguoClient {
     final signed = await signer.sign(body, {
       'iid': installId,
       'device_id': deviceId,
+      'cdid': ?cdid,
       'ac': 'wifi',
       'channel': 'update_64',
       'aid': '8662',
