@@ -108,14 +108,30 @@ updates/windows/latest.json
 updates/android/latest.json
 ```
 
-**安装包不能放 COS 默认域名**：腾讯云对 `*.myqcloud.com` 分发 APK/IPA 只堵 `GET`（`403 DownloadForbidden`），`HEAD` 仍回 200。装自己的服务器后，清单留在 COS（存量客户端只知道这个地址），包从自建域名下载：
+**安装包不能放 COS 默认域名**：腾讯云对 `*.myqcloud.com` 分发 APK/IPA 只堵 `GET`（`403 DownloadForbidden`），`HEAD` 仍回 200。三条出路按代价排序：
+
+1. **GitHub Release（当前使用）**：`scripts/publish-github.mjs` 负责建 Release、传资产、校验摘要，再把清单里的 `url` 指向 Release 资产地址（`https://github.com/<owner>/<repo>/releases/download/<tag>/<file>`，客户端只接受 https，符合约束）：
+
+```powershell
+node scripts/publish-github.mjs plan                    # 看 dist\ 里哪些产物会传
+node scripts/publish-github.mjs all --proxy http://127.0.0.1:7897
+node scripts/publish-cos.mjs push-android dist\Hongputao-Android-arm64-0.11.1.apk `
+  --skip-upload --package-url https://github.com/Hanc/Hongguo-video-pack/releases/download/v0.11.1/Hongputao-Android-arm64-0.11.1.apk
+```
+
+令牌按 `--token` → `GITHUB_TOKEN` → `.local/gh.json` 顺序取，脚本不打印也不入库。`--package-url` 会先发一次真实分段 GET（跟随 302）确认能下载，再写清单。
+
+2. **自建服务器**：清单留在 COS（存量客户端只认这个地址），包从自建域名下载。
+3. **备案自定义域名 + COS CNAME**：省一台机器，但要域名和备案。
+
+当前线上分工：Android 走 GitHub Release（COS 无法分发 APK），Windows 仍走 COS（`.exe` 不限，且国内更稳）。
 
 ```powershell
 $env:HONGGUO_SERVER_BASE  = 'https://dl.example.com'
 $env:HONGGUO_UPLOAD_TOKEN = '<服务端令牌>'
 ```
 
-部署脚本、nginx 配置、自检命令与故障对照见 [docs/self-hosted-dist.md](docs/self-hosted-dist.md)（服务端是零依赖的 `server/dl-server.mjs`）。
+部署脚本、nginx 配置、自检命令与故障对照见 [docs/self-hosted-dist.md](docs/self-hosted-dist.md)（服务端是零依赖的 `tooling/release/dl-server.mjs`）。
 
 应用内「关于与许可 → 检查更新」只按 `versionCode` 比较新旧，下载后逐字节核对 `sha256` 与大小，不匹配就丢弃；Android 走系统安装器（需系统允许安装未知应用）。验收用 `hongguo_studio.exe --update-check`（结果写入 `.local/update-check/result.json`），边界见 [docs/acceptance-0.11.0.md](docs/acceptance-0.11.0.md)。
 

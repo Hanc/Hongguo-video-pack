@@ -230,7 +230,7 @@ async function publish(platform, file, notes, opts = {}) {
     platform,
     version: ver.name,
     versionCode: ver.code,
-    url: packageUrlFor(cfg, key, uploaded.url),
+    url: opts.packageUrl || packageUrlFor(cfg, key, uploaded.url),
     size: uploaded.size,
     sha256,
     publishedAt: new Date().toISOString(),
@@ -272,7 +272,7 @@ function agentFor(target) {
   return target.protocol === 'http:' ? httpRequest : request;
 }
 
-function checkPackage(url) {
+function checkPackage(url, hops = 0) {
   return new Promise((resolve, reject) => {
     const target = new URL(url);
     const req = agentFor(target)(
@@ -284,6 +284,13 @@ function checkPackage(url) {
         headers: { Range: 'bytes=0-0' },
       },
       (res) => {
+        // GitHub Release 的资产地址会 302 到对象存储，必须跟到最终响应再判定，
+        // 否则会把「重定向成功」当成「不可下载」。
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && hops < 5) {
+          res.resume();
+          resolve(checkPackage(new URL(res.headers.location, url).toString(), hops + 1));
+          return;
+        }
         const chunks = [];
         res.on('data', (chunk) => chunks.push(chunk));
         res.on('end', () =>
@@ -359,6 +366,11 @@ const packageBase = (() => {
   const at = argv.indexOf('--package-base');
   return at >= 0 ? argv[at + 1] : undefined;
 })();
+// 完整下载地址（GitHub Release 之类的扁平路径），优先级高于 --package-base。
+const packageUrl = (() => {
+  const at = argv.indexOf('--package-url');
+  return at >= 0 ? argv[at + 1] : undefined;
+})();
 const skipUpload = argv.includes('--skip-upload');
 const noManifest = argv.includes('--no-manifest');
 const serverBase = (() => {
@@ -367,7 +379,7 @@ const serverBase = (() => {
 })();
 const uploadToken = process.env.HONGGUO_UPLOAD_TOKEN;
 
-const options = { packageBase, skipUpload, noManifest, serverBase, uploadToken };
+const options = { packageBase, packageUrl, skipUpload, noManifest, serverBase, uploadToken };
 
 try {
   if (command === 'probe') {
@@ -386,8 +398,8 @@ try {
   } else {
     console.log(
       '用法：probe | stage | push-android <apk> | push-windows <exe> | release' +
-        '  [--notes "说明"] [--package-base https://域名] [--server-base https://自己的服务器]' +
-        '  [--skip-upload] [--no-manifest]\n' +
+        '  [--notes "说明"] [--package-base https://域名] [--package-url https://完整地址]' +
+        '  [--server-base https://自己的服务器] [--skip-upload] [--no-manifest]\n' +
         '上传令牌用环境变量 HONGGUO_UPLOAD_TOKEN 传入。',
     );
     process.exit(2);
